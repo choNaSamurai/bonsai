@@ -1,0 +1,26 @@
+{
+    "name": "PocketArbor.PlayMode.Tests",
+    "rootNamespace": "PocketArbor.PlayMode.Tests",
+    "references": [
+        "PocketArbor.Domain",
+        "PocketArbor.Application",
+        "PocketArbor.Infrastructure",
+        "PocketArbor.Presentation",
+        "PocketArbor.Bootstrap",
+        "VContainer",
+        "UnityEngine.TestRunner"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "nunit.framework.dll"
+    ],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "UNITY_INCLUDE_TESTS"
+    ],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

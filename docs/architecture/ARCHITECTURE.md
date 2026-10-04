@@ -1,6 +1,6 @@
 # Архітектура Pocket Arbor на Unity
 
-> Власник: **Unity Architect** · Статус: **Draft v0.1** (очікує погодження) · 2026-10-03
+> Власник: **Unity Architect** · Статус: **Draft v0.2** (очікує погодження) · 2026-10-04 (PA-101: фактичні версії пакетів, структура Assets)
 > Джерело вимог: [`reference/flutter-v3.2/`](../reference/flutter-v3.2/) — ТЗ, архітектура і дизайн-система, написані під Flutter. Цей документ **замінює** Flutter-специфічні частини; рушій-незалежні вимоги (математика росту, ґрунт, онбординг, комплаєнс) переходять у [GDD](../gdd/GDD.md) і [BALANCE](../gdd/BALANCE.md) без змін.
 > Ключові рішення оформлені як ADR у [`docs/adr/`](../adr/).
 
@@ -49,6 +49,30 @@
 | Локалізація | intl | `com.unity.localization` (en, ja; uk — v1.1) | — |
 | Тести | flutter_test, golden_toolkit | **Unity Test Framework** (EditMode/PlayMode), `com.unity.test-framework.performance`, скриншот-порівняння | [QA strategy](../qa/TEST_STRATEGY.md) |
 
+### 2.1. Фактичні версії пакетів (PA-101, Unity 6000.6.4f1)
+
+Джерело правди — `Packages/manifest.json` + `Packages/packages-lock.json`; обґрунтування — TD-005…TD-007.
+
+| Пакет | Версія | Джерело |
+|---|---|---|
+| `com.unity.render-pipelines.universal` (+ core, shadergraph) | 17.6.0 | вбудований |
+| `com.unity.inputsystem` | 1.20.0 | Unity |
+| `com.unity.ugui` (uGUI + TextMeshPro) | 2.6.0 | вбудований |
+| `com.unity.2d.sprite` | 1.0.0 | вбудований |
+| `com.unity.test-framework` / `.performance` | 1.8.0 / 6.6.0 | вбудований |
+| `com.unity.nuget.newtonsoft-json` | 3.2.2 | Unity |
+| `com.unity.localization` (→ addressables 2.11.2) | 1.5.13 | Unity |
+| `com.unity.mobile.notifications` | 2.5.0 | Unity |
+| `com.unity.purchasing` (IAP 5, StoreKit 2) | 5.4.4 | Unity registry |
+| `jp.hadashikick.vcontainer` | 1.19.0 | OpenUPM |
+| `com.cysharp.r3` (R3.Unity) + `org.nuget.r3` (ядро) | 1.3.1 | OpenUPM + UnityNuGet (TD-006) |
+| `com.cysharp.unitask` | 2.5.11 | OpenUPM |
+| `com.kyrylokuzyk.primetween` | 1.3.3 | OpenUPM |
+
+Модулі в manifest: `androidjni, audio, imageconversion, imgui, jsonserialize, particlesystem, physics2d, ui, unitywebrequest`. Залежностями додатково підтягуються `physics` (від uGUI), `physicscore2d`, `animation`, `uielements`, `hierarchycore`, `assetbundle`, `unitywebrequestassetbundle`. Відсутні: terrain, cloth, vehicles, ai, video, wind, vr/xr, umbra, director/timeline, unityanalytics.
+
+> **Пастка імен**: namespace `PocketArbor.Application` затіняє `UnityEngine.Application` — у коді `PocketArbor.*` пишемо `UnityEngine.Application.xxx` (TD-008).
+
 ## 3. Шари та Assembly Definitions
 
 ```
@@ -69,9 +93,13 @@ Assets/_Project/
 ├── Config/     (ScriptableObjects: Species, Soil, Growth, Input, Audio) — Game Designer задає значення
 ├── Prefabs/    (TreeView, Pot, UI/TreeHUD, UI/BottomToolDock, ...)
 ├── Scenes/     Main.unity (одна сцена)
-└── Plugins/
-    ├── iOS/         Haptics.mm, AudioSessionBridge.mm, AppGroupBridge.mm, Widget~/ (Swift sources)
-    └── Android/     pocketarbor-native.androidlib/ (Kotlin/Java: haptics, noisy receiver, widget)
+├── Settings/Rendering/  URP_Default, URP_LowEnd, Renderer2D, URP Global Settings, DefaultVolumeProfile
+├── Editor/     PocketArbor.Editor (ProjectSetup — ідемпотентне налаштування проєкту; Build/ — PostProcessBuild)
+└── link.xml    (стрипінг, TD-011)
+
+Assets/Plugins/                       (стандартне розташування Unity, TD-010)
+├── iOS/         PrivacyInfo.xcprivacy; далі Haptics.mm, AudioSessionBridge.mm, AppGroupBridge.mm, Widget~/ (Swift)
+└── Android/     pocketarbor-native.androidlib/ (Kotlin/Java: haptics, noisy receiver, widget)
 ```
 
 **Правила залежностей** (перевіряються asmdef-посиланнями — порушення не скомпілюється):
