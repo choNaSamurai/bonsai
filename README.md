@@ -15,4 +15,4 @@
 brew install git-lfs && git lfs install
 ```
 
-Далі — Unity Hub + Unity 6.3 LTS з модулями iOS і Android Build Support, відкрити теку репозиторію як проєкт (після PA-101).
+Далі — Unity Hub + Unity 6.6 (6000.6.4f1) з модулями iOS і Android Build Support, відкрити теку репозиторію як проєкт (після PA-101).

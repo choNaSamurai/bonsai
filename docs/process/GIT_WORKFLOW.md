@@ -79,6 +79,6 @@
 - [x] `git init -b main`
 - [x] `.gitignore`, `.gitattributes` (LFS + UnityYAMLMerge), `.editorconfig`
 - [ ] Встановити `git-lfs` (`brew install git-lfs && git lfs install`)
-- [ ] Перший коміт на `main` (`chore: bootstrap repository`) — **очікує погодження**
-- [ ] Створити `develop` від першого коміту
+- [x] Перший коміт на `main` (`chore: bootstrap repository`, 94969dc)
+- [x] Створити `develop` від першого коміту
 - [ ] Опційно: `brew install git-flow` (CLI-обгортка; не обов'язкова — всі кроки виконуються звичайним git)

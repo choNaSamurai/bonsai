@@ -21,7 +21,7 @@
 
 | Підсистема | Flutter (оригінал) | Unity (пропозиція) | ADR |
 |---|---|---|---|
-| Рушій | Flutter 3.47 / Impeller | **Unity 6.3 LTS**, IL2CPP, ARM64 | [0001](../adr/0001-unity-version-and-pipeline.md) |
+| Рушій | Flutter 3.47 / Impeller | **Unity 6.6 (6000.6.4f1)**, IL2CPP, ARM64 | [0001](../adr/0001-unity-version-and-pipeline.md) |
 | Рендер-пайплайн | Impeller (Metal/Vulkan) | **URP + 2D Renderer**, ортографічна камера | [0001](../adr/0001-unity-version-and-pipeline.md) |
 | Архітектура коду | Feature-First Clean Arch | Clean Arch через **Assembly Definitions**; Domain без UnityEngine | [0002](../adr/0002-layered-assemblies.md) |
 | DI | Riverpod providers | **VContainer** | [0002](../adr/0002-layered-assemblies.md) |
@@ -46,7 +46,7 @@
 | QR | qr_flutter | ZXing.Net (Apache-2.0) | — |
 | Deep links | app_links | `Application.deepLinkActivated` + Universal/App Links | — |
 | Wakelock | wakelock_plus | `Screen.sleepTimeout = SleepTimeout.NeverSleep` | — |
-| Локалізація | intl | `com.unity.localization` (uk, en, ja) | — |
+| Локалізація | intl | `com.unity.localization` (en, ja; uk — v1.1) | — |
 | Тести | flutter_test, golden_toolkit | **Unity Test Framework** (EditMode/PlayMode), `com.unity.test-framework.performance`, скриншот-порівняння | [QA strategy](../qa/TEST_STRATEGY.md) |
 
 ## 3. Шари та Assembly Definitions
@@ -237,7 +237,7 @@ OnApplicationPause(true):
 
 ## 11. Відкриті питання (потребують рішення власника)
 
-1. Unity 6.3 LTS — ок? (ADR-0001)
+1. Unity 6.6 (6000.6.4f1) замість 6.3 LTS — погодити компроміс підтримки (ADR-0001)
 2. uGUI Canvas vs UI Toolkit для UI — пропоную uGUI (ADR-0006).
 3. Геолокація: coarse-permission vs без дозволу (IP + ручне місто) (ADR-0007).
 4. Android-віджет: RemoteViews vs Glance (ADR-0007).

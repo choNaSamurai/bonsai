@@ -131,8 +131,98 @@ moisture = Clamp01(moisture + rain - evaporation);
 
 > ⚠ ТЗ §5.4 і Резолюція 4 розходяться (magic/version/CRC лише в Резолюції 4). Пропозиція — формат з Резолюції 4; фінальний layout — у PA-205.
 
+## 9. Прогресія та монетизація (Proposed)
+
+> Усі значення цього розділу — **Proposed** (GDD §10, 2026-10-04), чекають погодження власника. До погодження Gameplay Developer їх у ScriptableObject-и не переносить. Нові ассети: `ProgressionConfig`, `MonetizationConfig`, `DormancyConfig` (або підсекція `GrowthConfig.Offline`), `LocalizationSettings` (Unity Localization, не SO балансу).
+
+### 9.1. Алея Майстра — `ProgressionConfig.Alley` (GDD §10.1)
+
+| Параметр | Значення | Config | Нотатка |
+|---|---|---|---|
+| Подія відкриття 2-го слота | перший дріт спав (`WireSetDays` минули) | `AlleyUnlockEvent = FirstWireSet` | Дріт з Дня 2 → слот не раніше Дня 16 |
+| Гарантоване відкриття | День 30 | `AlleyGuaranteeDay` | Якщо дріт не використано |
+| Прев'ю порожнього горщика на полиці | з Дня 7 | `AlleyPreviewFromDay` | Тьмяний силует, без таймера/цифр |
+| Слотів у MVP | 2 | `AlleyMaxSlots` | v1.1 → 3 |
+| Породи для 2-го слота | стартова, що не обрана; насінина з QR; Сакура (IAP) | — | Жодних ексклюзивів за час |
+
+Перевірка: `WireSetDays = 14` (§2) + накладання на Дні 2 → подія на Дні 16; вікно D16–D30 ⊂ D14–D30 з Резолюції 7 архіву.
+
+### 9.2. Розпізнавання стилю крони — `ProgressionConfig.Style` (GDD §10.2, v1.1)
+
+| Стиль | Умова (перевіряється зверху вниз) | Config |
+|---|---|---|
+| Chokkan | нахил стовбура від вертикалі < 5° і ≤ 1 зміна кривини | `StyleChokkanMaxLean = 5°` |
+| Shakan | нахил стовбура 15–45° | `StyleShakanLeanMin/Max = 15°/45°` |
+| Fukinagashi | ≥ 70% маси крони з одного боку від осі стовбура | `StyleWindsweptMassRatio = 0.70` |
+| Hokidachi | стовбур розгалужується на висоті ≤ 25% від загальної, ≥ 4 гілки 1-го рівня в межах ±20% довжини | `StyleBroomSplitHeight = 0.25`, `StyleBroomMinBranches = 4`, `StyleBroomLengthTolerance = 0.20` |
+| Moyogi | решта (≥ 2 зміни кривини або нахил 5–15°) | за замовчуванням |
+
+Каскадні стилі (Kengai, Han-Kengai) не входять: заборонені правилом Pot Lip (`Y >= potLipY`). Нахил стовбура і розподіл маси записуються у знімок Хроніки вже в MVP.
+
+### 9.3. Каталог IAP — `MonetizationConfig` (GDD §10.3)
+
+| SKU | Тип | US tier | Config |
+|---|---|---|---|
+| `pot_tokoname` | стартовий, безкоштовний | $0 | `Catalog[0].Price = 0`, `IsDefault = true` |
+| `pot_kuro` | неконсьюмабл | $2.99 | `Catalog[].ProductId`, `PriceTierUsd` |
+| `pot_celadon` | неконсьюмабл | $2.99 | — |
+| `species_sakura` | неконсьюмабл (насінина у скриньку) | $3.99 | `RequiresAlleyUnlocked = true` |
+| `bundle_master_shelf` | набір Kuro + Celadon + Sakura | $6.99 (−30% від $9.97) | `BundleDiscount = 0.30` |
+
+| Параметр | Значення | Config |
+|---|---|---|
+| Полиця з'являється в HUD | з Дня 3 (після Aha і першої доби росту) | `ShopVisibleFromDay = 3` |
+| Автовідкриття Полиці / попапи | 0 | `ShopAutoPromptCount = 0` |
+| Обмежені за часом пропозиції | немає | `TimedOffersEnabled = false` |
+| Family Sharing | увімкнено для всіх SKU | store config (UA) |
+| Restore Purchases | 4-стадійний FSM, таймаут мережі 12 с | `RestoreNetworkTimeoutSec = 12` (ТЗ §5.5) |
+| Регіональні ціни | через store price tiers (автоеквівалент) | store config |
+
+Гіпотеза (не KPI): payer rate 2–4%, ARPPU ≈ $4–5.
+
+### 9.4. Ім'я дерева — `ProgressionConfig.Naming` (GDD §10.4)
+
+| Параметр | Значення | Config |
+|---|---|---|
+| Макс. довжина імені | 16 символів | `NameMaxLength` |
+| Пул запропонованих імен | 24 (Kaze, Yuki, Hana, Sora, Mori, Tsuki, Ame, Hikari, …) | `SuggestedNames[]` (локалізований список) |
+| Вибір із пулу | `randomSeed % 24` з геному (детерміновано) | — |
+| Заборонені символи | емоджі, системні піктограми, керуючі символи | `NameForbiddenRanges` |
+| Бюджет кроку в онбордингу | ≤ 5 с (крок 40–45 с) | — |
+| Перейменування | будь-коли з Хроніки | — |
+
+### 9.5. Повернення з Dormancy — `DormancyConfig` (GDD §10.5)
+
+| Параметр | Значення | Config |
+|---|---|---|
+| Сірих «сплячих пагонів» при пробудженні | 1–3 | `DormantShootsMin/Max` |
+| Гарантованих живих бруньок після обрізки | 1 | `WakeGuaranteedBuds` |
+| Відступ моху з ґрунту після поливу | 2.0 с | `MossRecedeDuration` |
+| Мох на стовбурі | лишається (патина) | `TrunkMossPersists = true` |
+| Цільова тривалість ритуалу | 30–45 с | — (AC) |
+| Доступні дії до поливу | лише Water | `WakeLockToolsUntilWatered = true` |
+| Нотифікацій за час сну | 1 (на вході в Dormancy), далі тиша | `DormancyNotificationCount = 1` |
+| Число пропущених днів у UI | не показується | — (Calm UI) |
+| Віха Хроніки | «Пробудження» | `ChronicleEvent.Awakening` |
+
+Інваріант: жоден вузол, що існував до Dormancy, не змінюється і не видаляється ритуалом.
+
+### 9.6. Локалізації — Unity Localization `Locales` (GDD §10.6)
+
+| Локаль | Реліз | Умова | Шрифт |
+|---|---|---|---|
+| `en` | MVP | базова, ASO | ZenMaru Gothic (Latin) |
+| `uk` | v1.1 | **вимкнено для MVP (власник, 2026-10-04)**; потребує Cyrillic-шрифту | Cyrillic fallback у бюджеті < 450 КБ |
+| `ja` | MVP* | *лише з вичиткою носієм; інакше v1.1 | субсет використаних кандзі |
+| `de`, `fr`, `es`, `pt-BR`, `ko` | v1.1 | ринки cozy-ігор за спроможністю | — |
+| `zh-Hans`, `zh-Hant` | v1.2 | — | — |
+
+Apple keyword field: 100 байт; CJK-символи — 2–3 байти → окремий короткий набір ключових слів для `ja`.
+
 ## Журнал змін
 
 | Дата | Параметр | Було → Стало | Причина | Хто |
 |---|---|---|---|---|
 | 2026-10-03 | — | Перенесено з ТЗ v3.2 | Старт Unity-версії | Game Designer |
+| 2026-10-04 | §9 (новий) | — → Proposed: Алея (FirstWireSet, гарантія D30, прев'ю D7, 2 слоти); пороги стилів; каталог IAP ($2.99/$2.99/$3.99, набір $6.99, −30%, Полиця з Дня 3); ім'я ≤ 16, пул 24; Dormancy-пробудження (1–3 пагони, 1 брунька, 2.0 с, 1 нотифікація); локалі en/uk/ja → v1.1 de/fr/es/pt-BR/ko | PA-005: відповіді на GDD §10 | Game Designer |
+| 2026-10-04 | §9.6 `uk` | MVP → v1.1 | Рішення власника: не вирішувати кирилицю/шрифт у MVP | Оркестратор |

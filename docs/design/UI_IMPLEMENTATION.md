@@ -40,4 +40,4 @@
 
 ## 6. Локалізація
 
-- `com.unity.localization`, String Tables `UI`, `Onboarding`, `Store`. Мови: uk, en (ja — TBD у GDD §10).
+- `com.unity.localization`, String Tables `UI`, `Onboarding`, `Store`. Мови MVP: en (+ ja за умови вичитки носієм); uk — v1.1 (див. GDD §10.6).

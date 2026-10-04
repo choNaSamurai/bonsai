@@ -34,7 +34,7 @@ game-designer (уточнити AC/баланс) → unity-architect (план/A
 Незалежні агенти запускай паралельно. Кожному агенту в промпті давай: ID задачі, файли-посилання, очікуваний результат.
 
 ## Технічні орієнтири (деталі — ARCHITECTURE.md)
-- Unity 6.3 LTS, URP 2D Renderer, IL2CPP, Input System, uGUI + TMP, VContainer, R3, UniTask, PrimeTween.
+- Unity 6.6 (6000.6.4f1), URP 2D Renderer, IL2CPP, Input System, uGUI + TMP, VContainer, R3, UniTask, PrimeTween.
 - Шари asmdef: `Domain`/`Application` без UnityEngine → `Infrastructure`, `Presentation`, `Bootstrap`.
 - 0 B GC у кадрі; 120 FPS при взаємодії; бюджет .ipa < 25 МБ / .aab < 20 МБ.
 - Усі числа балансу — з `docs/gdd/BALANCE.md` через ScriptableObject-и.
@@ -43,6 +43,6 @@ game-designer (уточнити AC/баланс) → unity-architect (план/A
 ## Маркетингові скіли
 `.claude/skills/` містить 50 скілів з [coreyhaines31/marketingskills](https://github.com/coreyhaines31/marketingskills) (MIT, деталі — [`vendor/marketingskills/VENDORED.md`](vendor/marketingskills/VENDORED.md)). Продуктовий контекст для них — [`.agents/product-marketing.md`](.agents/product-marketing.md). Найрелевантніші: `aso`, `launch`, `onboarding`, `paywalls`, `pricing`, `marketing-psychology`, `customer-research`, `social`, `referrals`, `content-strategy`. Оновлення — `scripts/sync-marketingskills.sh`.
 
-## Стан середовища (2026-10-03)
-- Unity Hub/Editor **не встановлено**, `git-lfs` **не встановлено** — див. PA-001 у BACKLOG.
+## Стан середовища (2026-10-04)
+- Unity 6000.6.4f1 встановлено (бракує модулів iOS/Android — PA-001), `git-lfs` встановлено, UnityYAMLMerge налаштовано в локальному git config.
 - Код, написаний без Unity, вважається неперевіреним компіляцією — так і повідомляти.

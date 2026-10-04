@@ -1,7 +1,7 @@
 # Product Marketing Context
 
-**Document version:** v1 (draft — зібрано з ТЗ та дизайн-системи, не підтверджено дослідженнями)
-**Last updated:** 2026-10-03
+**Document version:** v3 (draft — зібрано з ТЗ та дизайн-системи, не підтверджено дослідженнями; v2 — додано ціни, мови, Dormancy-ритуал з GDD §10 Proposed)
+**Last updated:** 2026-10-04
 
 ## Product Overview
 **One-liner:** A peaceful, meditative bonsai growing ritual shaped by real-world weather.
@@ -9,6 +9,7 @@
 **Product category:** Cozy / zen mobile game; digital plant; mindfulness app adjacent.
 **Product type:** Mobile game (iOS, Android), Unity.
 **Business model:** Free + косметичні IAP-неконсьюмабли (горщики, порода Сакура). Без реклами, без енергії, без підписки.
+**Pricing (Proposed, GDD §10.3 / BALANCE §9.3):** стартовий горщик Tokoname безкоштовний; Kuro $2.99, Celadon $2.99, Sakura $3.99, набір «Master's Shelf» $6.99 (−30%). Ціни постійні, без таймерів і розпродажів; Family Sharing; магазин («Полиця») відкривається тапом по горщику не раніше Дня 3, ніколи не спливає сам.
 
 ## Target Audience
 **Target companies:** — (B2C)
@@ -82,6 +83,9 @@
 | Term | Meaning |
 |------|---------|
 | Dormancy | Сплячка дерева після 7+ днів відсутності, без втрати прогресу |
+| Awakening | Ритуал повернення з Dormancy (30–45 с): полив → санітарний зріз 1–3 сірих пагонів → нова брунька; без числа пропущених днів |
+| Master's Alley | Полиця з горщиками; 2-й слот відкривається, коли спадає перший дріт (D16+), гарантовано на D30 |
+| Master's Shelf | Набір IAP: Kuro + Celadon + Sakura, $6.99 |
 | Nebari | Видима коренева основа стовбура, потовщується з віком |
 | Chronicle | Хроніка Гілок — таймлапс історії дерева |
 | Seed / DNA | 32-байтний геном, яким можна поділитись |
@@ -114,6 +118,10 @@
 - Short Description (Android): `A peaceful, meditative bonsai growing ritual shaped by real-world weather.`
 - Keywords: `plant,zen,relax,meditation,pruning,mindfulness,nature,widget,garden,calm,japanese,botany,sakura,virtual`
 
+**Локалізації (GDD §10.6, рішення власника 2026-10-04):** MVP — `en` (базова) + `ja` (лише з вичиткою носієм, інакше v1.1); `uk` відкладено до v1.1 (шрифт без кирилиці); v1.1 — `uk`, `de`, `fr`, `es`, `pt-BR`, `ko`; v1.2 — `zh-Hans`, `zh-Hant`. Сторові сторінки локалізуються разом з грою; для `ja` — окремий короткий набір ключових слів (100 байт, CJK = 2–3 байти/символ).
+
 ## Changelog
 *Newest first. One line per revision: what changed and why.*
+- v3 (2026-10-04) — Локалізації: `uk` перенесено з MVP у v1.1 за рішенням власника (шрифт без кирилиці).
+- v2 (2026-10-04) — Додано Proposed-ціни IAP і каталог, мови на запуск і дорожню карту локалей, глосарій (Awakening, Master's Alley, Master's Shelf) — з GDD §10 (PA-005); чекає погодження власника.
 - v1 (2026-10-03) — Initial context, перенесено з ТЗ v3.2 і DESIGN_SYSTEM; потребує валідації дослідженням.

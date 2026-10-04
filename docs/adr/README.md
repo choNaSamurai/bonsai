@@ -10,7 +10,7 @@
 
 | # | Назва | Статус |
 |---|---|---|
-| [0001](0001-unity-version-and-pipeline.md) | Unity 6.3 LTS + URP 2D Renderer | Proposed |
+| [0001](0001-unity-version-and-pipeline.md) | Unity 6.6 (6000.6.4f1) + URP 2D Renderer | Proposed |
 | [0002](0002-layered-assemblies.md) | Шари через asmdef, VContainer, R3, UniTask | Proposed |
 | [0003](0003-tree-data-model.md) | Плоска таблиця вузлів замість рекурсивного immutable-дерева | Proposed |
 | [0004](0004-procedural-tree-rendering.md) | Процедурний меш гілок + інстансинг листя | Proposed |
