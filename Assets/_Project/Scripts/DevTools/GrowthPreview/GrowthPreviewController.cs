@@ -30,8 +30,7 @@ namespace PocketArbor.DevTools.GrowthPreview
         [SerializeField, Range(-10f, 45f)] float _temperatureC = 25f;
         [SerializeField, Range(0f, 1f)] float _moisture = 0.5f;
         [SerializeField] bool _onboardingCut;
-        [SerializeField, Tooltip("PA-102S: PruneToStyle on days 20/30/…/70")] bool _styled;
-        [SerializeField] float _framePadding = 0.12f;
+        [SerializeField, Tooltip("PA-102P: PruneToStyle S1–S7 on days 20/30/…/120")] bool _styled;
         [SerializeField, Tooltip("PA-103S: Textured = painted bark, atlas pads, pot/soil/washi art")] bool _textured;
         [SerializeField, Tooltip("PA-103S: realism_l2_painterly.jpg over the preview, aligned by the pot")] bool _referenceOverlay;
         [SerializeField, Range(0f, 1f)] float _referenceAlpha = 0.5f;
@@ -89,7 +88,15 @@ namespace PocketArbor.DevTools.GrowthPreview
 
         public bool Styled => _styled;
 
-        /// <summary>PA-102S: Wild (no pruning) or Styled (PruneToStyle on GrowthPreviewModel.StyleDays).</summary>
+        /// <summary>PA-102P harness: Styled = planting → onboarding cut → styling (AC notation).</summary>
+        public void SetOnboardingCut(bool cut)
+        {
+            _onboardingCut = cut;
+            _paramsDirty = true;
+            Refresh();
+        }
+
+        /// <summary>PA-102S: Wild (no pruning) or Styled (PruneToStyle S1–S7 on StyleConfig days).</summary>
         public void SetStyled(bool styled)
         {
             _styled = styled;
@@ -272,18 +279,33 @@ namespace PocketArbor.DevTools.GrowthPreview
             else DestroyImmediate(target);
         }
 
+        /// <summary>Zoom z of the pot-based frame chosen by the last refresh (TD-030 prototype, ZoomMin 0.78 — the pot is never cut).</summary>
+        public float FramedZoom { get; private set; } = 1f;
+
+        /// <summary>Top of the pot in world units (Textured: the sprite's back rim; Flat: the Pot Lip y = 0).</summary>
+        float PotTopY => _textured && _view != null ? _view.PotRect.yMax : 0f;
+
+        /// <summary>
+        /// PA-102P / TD-030: the camera frames the pot first (fixed 92 units) and zooms out only as far as the tree needs
+        /// (<see cref="PotFraming"/>); the whole pot always stays in view. <paramref name="bounds"/> is unused (kept for the Flat path).
+        /// </summary>
         void FrameCamera(Bounds bounds)
         {
             if (_camera == null) return;
+            float zoom = PotFraming.Zoom(_builder.LastPotWidth, PotTopY, _builder.LastTreeRect);
+            FramedZoom = zoom;
+            Rect frame = PotFraming.FrameAt(zoom, _builder.LastPotWidth, PotTopY);
             float aspect = _camera.pixelHeight > 0 ? _camera.pixelWidth / (float)_camera.pixelHeight : 1f;
             // Reserve the left 30% of the screen for the control panel when it is visible.
             float panelShare = UnityEngine.Application.isPlaying ? 0.3f : 0f;
-            float usableAspect = aspect * (1f - panelShare);
-            float halfHeight = Mathf.Max(bounds.extents.y, bounds.extents.x / Mathf.Max(0.1f, usableAspect)) * (1f + _framePadding);
+            float usableAspect = Mathf.Max(0.1f, aspect * (1f - panelShare));
+            float halfHeight = Mathf.Max(0.5f * frame.height, 0.5f * frame.width / usableAspect);
             _camera.orthographic = true;
-            _camera.orthographicSize = Mathf.Max(10f, halfHeight);
-            float shiftX = panelShare * aspect * _camera.orthographicSize; // centre the tree in the free area
-            _camera.transform.position = new Vector3(bounds.center.x - shiftX, bounds.center.y, -100f);
+            _camera.orthographicSize = halfHeight;
+            float shiftX = panelShare * aspect * halfHeight; // centre the frame in the free area
+            // Keep the frame's bottom (the pot) at the bottom of the view when the window is taller than the frame.
+            float centerY = frame.yMin + halfHeight;
+            _camera.transform.position = new Vector3(frame.center.x - shiftX, centerY, -100f);
         }
 
         void OnGUI()

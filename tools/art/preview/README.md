@@ -10,6 +10,7 @@ from the generated sources in `Assets/_Project/Art/Source/` (L2 reference crops,
 | `build_pot.py` | `pot_tokoname.png/.json` |
 | `build_soil.py` | `soil_moist.png`, `soil_dry.png`, `soil.json` |
 | `build_washi.py` | `washi_bg.png` |
+| `build_masks.py` | `ref_mask_{l2_momiji,night_kuromatsu}[_foliage].png` (PA-102P IoU fixtures) + виміри (stdout, `$ART_SCRATCH/mask_measurements.json`) і оверлеї `mask_overlay_*.png`, `mask_collage.png` |
 | `collage.py` | contact sheet for review (written to `$ART_SCRATCH`, default `Temp/art-preview/`) |
 
 Run from this folder: `python3 build_pads.py` etc. Re-run when D5 / B2 v2 / B3 v2 / C v2 arrive from

@@ -127,3 +127,79 @@ def ink_lines(W, H, seed, count, color, width, alpha, length=(0.25, 0.6)):
                     a = int(alpha * fade)
                     d.line([((xa + dxw) * S, (ya + dyw) * S), ((xb + dxw) * S, (yb + dyw) * S)], fill=color + (a,), width=max(1, int(wdt * S * (0.4 + 0.6 * fade))))
     return layer.resize((W, H), Image.LANCZOS)
+
+
+# ---- PA-102P: twisted ridge/furrow detail (all terms periodic in W and H -> seamless by construction) ----
+TWIST_K = 6   # ridges per tile across; one full lateral shift per tile height -> fibre slope W/(K*H) (~9.5 deg at 512²)
+
+def twisted_field(W, H, seed, k=TWIST_K, warp_amp=1.1):
+    """Return (ridge, furrow, mod) float maps 0..1: lit ridges, narrow dark furrows, slow amplitude modulation.
+    Phases use integer frequencies only, so every map tiles in x and y."""
+    rnd = random.Random(seed)
+    ph = [rnd.random() * 6.283 for _ in range(8)]
+    tau = 6.283185307
+    ridge = [[0.0] * W for _ in range(H)]; furrow = [[0.0] * W for _ in range(H)]; mod = [[0.0] * W for _ in range(H)]
+    for y in range(H):
+        v = y / H
+        for x in range(W):
+            u = x / W
+            warp = warp_amp * (0.55 * math.sin(tau * (2 * u + v) + ph[0]) + 0.3 * math.sin(tau * (3 * v - u) + ph[1])
+                               + 0.15 * math.sin(tau * (5 * u + 2 * v) + ph[2]))
+            t1 = tau * (k * u - v) + warp  # dx/dy = +1/k, same sense as twisted_strokes
+            t2 = tau * ((2 * k + 1) * u - 2 * v) + 0.7 * warp + ph[3]
+            s1 = math.sin(t1); s2 = math.sin(t2)
+            # lit side sits slightly left of the furrow (light from the upper left)
+            hl = 0.8 * smooth(0.45, 0.97, math.sin(t1 + 0.7)) + 0.2 * smooth(0.6, 0.98, math.sin(t2 + 0.7))
+            fu = 0.8 * smooth(0.86, 0.995, -s1) + 0.2 * smooth(0.92, 0.998, -s2)
+            m = 0.5 + 0.5 * math.sin(tau * (v + 2 * u) + 0.5 * warp + ph[4])  # long, calm modulation along the axis
+            m = 0.3 + 0.7 * smooth(0.1, 0.9, m)
+            ridge[y][x] = hl; furrow[y][x] = fu; mod[y][x] = m
+    return ridge, furrow, mod
+
+def twisted_strokes(W, H, seed, count, color, width, alpha, length=(0.35, 0.9), slope=None, wobble=(1.5, 5.0), blur=0.0):
+    """Long thin strokes following the twist direction (dx/dy = slope), drawn with 3×3 wrap copies -> tileable."""
+    rnd = random.Random(seed)
+    slope = (W / (TWIST_K * H)) if slope is None else slope
+    S = 2
+    layer = Image.new('RGBA', (W * S, H * S), (0, 0, 0, 0)); d = ImageDraw.Draw(layer)
+    for _ in range(count):
+        x0 = rnd.uniform(0, W); y0 = rnd.uniform(0, H); ln = rnd.uniform(*length) * H
+        sl = slope * rnd.uniform(0.9, 1.1); amp = rnd.uniform(*wobble); per = rnd.choice([1, 2]); ph = rnd.random() * 6.283
+        wdt = rnd.uniform(*width); steps = 60
+        pts = []
+        for i in range(steps + 1):
+            t = i / steps; y = y0 + t * ln
+            x = x0 + sl * (y - y0) + amp * math.sin(6.283 * per * t * ln / H + ph)
+            pts.append((x, y, t))
+        for dxw in (-W, 0, W):
+            for dyw in (-H, 0, H):
+                for (xa, ya, ta), (xb, yb, tb) in zip(pts, pts[1:]):
+                    fade = math.sin(math.pi * ta) ** 0.5
+                    d.line([((xa + dxw) * S, (ya + dyw) * S), ((xb + dxw) * S, (yb + dyw) * S)],
+                           fill=color + (int(alpha * fade),), width=max(1, int(wdt * S * (0.35 + 0.65 * fade))))
+    layer = layer.resize((W, H), Image.LANCZOS)
+    if blur:
+        # wrap-safe blur: blur a 3×3 tiled copy and take the centre
+        big = Image.new('RGBA', (W * 3, H * 3))
+        for i in range(3):
+            for j in range(3): big.paste(layer, (i * W, j * H))
+        layer = big.filter(ImageFilter.GaussianBlur(blur)).crop((W, H, 2 * W, 2 * H))
+    return layer
+
+def wrap_blur(im, r):
+    W, H = im.size
+    big = Image.new(im.mode, (W * 3, H * 3))
+    for i in range(3):
+        for j in range(3): big.paste(im, (i * W, j * H))
+    return big.filter(ImageFilter.GaussianBlur(r)).crop((W, H, 2 * W, 2 * H))
+
+def apply_field(base, ridge, furrow, mod, light, dark, hi_col):
+    W, H = base.size; out = base.copy(); o = out.load()
+    for y in range(H):
+        for x in range(W):
+            r, g, b = o[x, y]; m = mod[y][x]
+            h = ridge[y][x] * light * m; f = furrow[y][x] * dark * (0.5 + 0.5 * m)
+            r = r + (hi_col[0] - r) * h; g = g + (hi_col[1] - g) * h; b = b + (hi_col[2] - b) * h
+            k = 1 - f
+            o[x, y] = (int(clamp(r * k, 0, 255)), int(clamp(g * k, 0, 255)), int(clamp(b * k, 0, 255)))
+    return out

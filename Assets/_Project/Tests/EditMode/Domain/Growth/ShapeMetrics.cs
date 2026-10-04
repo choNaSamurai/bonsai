@@ -175,9 +175,8 @@ namespace PocketArbor.Domain.Tests.Growth
         }
 
         /// <summary>
-        /// AC11 harness: cuts a terminal non-bud node (deepest, parent has exactly one child) of the largest primary
-        /// branch, then grows until 3 new shoots appear in that branch (≤ 30 days). Returns how many of them are
-        /// ≤ 2 edges from the cut parent; <paramref name="counted"/> = shoots observed. −1 if no suitable tip.
+        /// AC11 / PA-102P AC15 harness: cuts the tip of the largest primary branch's own axis (its last apical node), then grows until 3 new shoots appear in that branch (≤ 30 days). Returns how many of them are
+        /// born on a node ≤ 2 edges from the cut parent; <paramref name="counted"/> = shoots observed. −1 if no suitable tip.
         /// </summary>
         public static int BackBuddingNearCut(GrowthSimulator sim, TreeGraph tree, out int counted, out int cutParentId)
         {
@@ -202,13 +201,11 @@ namespace PocketArbor.Domain.Tests.Growth
             if (primary < 0) return -1;
             int primaryId = nodes[primary].Id;
 
-            int tip = -1;
-            for (int i = primary + 1; i < nodes.Length; i++)
-            {
-                if (!IsInSubtree(nodes, i, primary) || shape.ChildCount(i) != 0 || nodes[i].Status == NodeStatus.Bud) continue;
-                if (shape.ChildCount(nodes[i].ParentIndex) != 1) continue;
-                if (tip < 0 || nodes[i].Depth > nodes[tip].Depth) tip = i;
-            }
+            // PA-102P AC15: «зріз кінчика первинної гілки» — the last node of the primary's own axis (apical chain), so the cut
+            // parent is the previous axis node (TD-032).
+            int tip = primary;
+            while (shape.ApicalChild(tip) >= 0) tip = shape.ApicalChild(tip);
+            if (tip == primary) tip = -1;
             if (tip < 0) return -1;
             cutParentId = nodes[nodes[tip].ParentIndex].Id;
             TreePruning.Prune(tree, nodes[tip].Id, cfg);
@@ -225,7 +222,9 @@ namespace PocketArbor.Domain.Tests.Growth
                 {
                     if (now[i].Id < nextId || !IsInSubtree(now, i, primaryIndex)) continue;
                     counted++;
-                    if (Distance(now, i, cutParent) <= 2) near++;
+                    // PA-102P AC15: interpretation (TD-032) — "born ≤ 2 edges from the cut" = the new shoot's parent lies within
+                    // 2 edges of the node that bore the cut (the BackBudRadiusEdges zone of BALANCE §1.3.5).
+                    if (Distance(now, now[i].ParentIndex, cutParent) <= 2) near++;
                 }
             }
             return near;

@@ -27,7 +27,8 @@ namespace PocketArbor.Domain.Tree
         public int NodeCount => _nodes.Length;
         public ReadOnlySpan<NodeData> Nodes => _nodes;
 
-        /// <summary>Structural invariants of ADR-0003: trunk at 0, parents precede children, depth = parent + 1, unique ids.</summary>
+        /// <summary>Structural invariants of ADR-0003: trunk at 0, parents precede children, depth = parent + 1, unique ids,
+        /// AttachT ∈ [0, 1], LastCutDay ∈ [−1, GrowthDayIndex] (BALANCE §1.3.5).</summary>
         public bool Validate(out string error)
         {
             if (_nodes.Length == 0 || _nodes.Length > TreeGraph.Capacity)
@@ -62,6 +63,12 @@ namespace PocketArbor.Domain.Tree
             }
             for (int i = 0; i < _nodes.Length; i++)
             {
+                int lastCut = _nodes[i].LastCutDay;
+                if (lastCut < NodeData.NoCut || lastCut > Growth.GrowthDayIndex)
+                {
+                    error = "node " + i + " has LastCutDay outside [-1, GrowthDayIndex]";
+                    return false;
+                }
                 if (_nodes[i].Id < 0 || _nodes[i].Id >= NextId)
                 {
                     error = "node " + i + " has id outside [0, NextId)";
@@ -109,7 +116,7 @@ namespace PocketArbor.Domain.Tree
                 && a.AgeDays == b.AgeDays && a.Status == b.Status
                 && Same(a.LeafScale, b.LeafScale) && Same(a.FlowerStage, b.FlowerStage)
                 && a.WiredAtUtcMs == b.WiredAtUtcMs && a.WireProgressDays == b.WireProgressDays
-                && a.BranchSide == b.BranchSide && Same(a.AttachT, b.AttachT);
+                && a.BranchSide == b.BranchSide && Same(a.AttachT, b.AttachT) && a.LastCutDay == b.LastCutDay;
         }
 
         static bool Same(double a, double b) => BitConverter.DoubleToInt64Bits(a) == BitConverter.DoubleToInt64Bits(b);

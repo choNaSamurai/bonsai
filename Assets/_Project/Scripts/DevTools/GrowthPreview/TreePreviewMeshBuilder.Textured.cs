@@ -92,6 +92,8 @@ namespace PocketArbor.DevTools.GrowthPreview
             _pPos.Clear(); _pUv0.Clear(); _pUv1.Clear(); _pCol.Clear(); _pIdx.Clear();
             _padKeys.Clear();
             _puffRecords.Clear();
+            LastTipOverflow = 0;
+            LastExtraTipSprites = 0;
 
             FoliageConfig foliage = Prepare(tree, growth, species);
             uint seed = tree.Genome.Seed;
@@ -99,8 +101,9 @@ namespace PocketArbor.DevTools.GrowthPreview
             int roots = NebariRootCount(growth);
             for (int r = 0; r < roots; r++)
             {
-                NebariRoot(seed, r, roots, out Vector2 a, out Vector2 c, out Vector2 b, out float thickness);
-                AddBarkRoot(a, c, b, thickness, Hash01(seed, _nodes[0].Id, 307u + (uint)r) * style.BarkTileWorld * 4f, style);
+                NebariRoot(seed, r, roots, _rootSamples);
+                float tone = Mathf.Lerp(style.RootToneMin, style.RootToneMax, Hash01(seed, _nodes[0].Id, 311u + (uint)r));
+                AddBarkRoot(_rootSamples, Hash01(seed, _nodes[0].Id, 307u + (uint)r) * style.BarkTileWorld * 4f, tone, style);
             }
             int treeStart = _bPos.Count;
 
@@ -115,6 +118,7 @@ namespace PocketArbor.DevTools.GrowthPreview
             for (int v = 0; v < _pPos.Count; v++) Extend(_pPos[v], ref minX, ref maxX, ref maxY);
             LastHeight = maxY;
             LastCrownWidth = maxX > minX ? maxX - minX : 0f;
+            LastTreeRect = maxX > minX ? Rect.MinMaxRect(minX, 0f, maxX, maxY) : new Rect(0f, 0f, 0f, 0f);
             LastTrunkBase = _th0;
             LastTrunkBaseFlared = _th0 * (1f + _flare);
 
@@ -173,9 +177,10 @@ namespace PocketArbor.DevTools.GrowthPreview
             Vector2 previous = Eval(i, 0f);
             Vector2 lastTangent = _dir[i];
             float lastWidth = 0f;
+            float tEnd = BarkEndT(i);
             for (int s = 0; s <= SegmentSamples; s++)
             {
-                float t = s / (float)SegmentSamples;
+                float t = tEnd * s / SegmentSamples;
                 Vector2 point = Eval(i, t);
                 Vector2 tangent = Eval(i, Mathf.Min(1f, t + 0.01f)) - Eval(i, Mathf.Max(0f, t - 0.01f));
                 tangent = tangent.sqrMagnitude > 1e-10f ? tangent.normalized : _dir[i];
@@ -211,23 +216,21 @@ namespace PocketArbor.DevTools.GrowthPreview
             AddRibbonIndices(start, sections);
         }
 
-        void AddBarkRoot(Vector2 a, Vector2 c, Vector2 b, float startWidth, float arc0, TexturedStyleConfig style)
+        void AddBarkRoot(List<Vector3> samplesXyw, float arc0, float tone, TexturedStyleConfig style)
         {
-            const int samples = 10;
+            int samples = samplesXyw.Count - 1;
             int start = _bPos.Count;
             float arc = arc0;
-            Vector2 previous = a;
+            Vector2 previous = samplesXyw[0];
             for (int s = 0; s <= samples; s++)
             {
-                float t = s / (float)samples;
-                float u = 1f - t;
-                Vector2 point = u * u * a + 2f * u * t * c + t * t * b;
-                Vector2 tangent = 2f * u * (c - a) + 2f * t * (b - c);
+                Vector2 point = samplesXyw[s];
+                Vector2 tangent = (Vector2)samplesXyw[Mathf.Min(samples, s + 1)] - (Vector2)samplesXyw[Mathf.Max(0, s - 1)];
                 tangent = tangent.sqrMagnitude > 1e-8f ? tangent.normalized : Vector2.right;
                 arc += (point - previous).magnitude;
-                float width = Mathf.Max(0.15f, startWidth * (1f - t * 0.92f));
+                float width = Mathf.Max(0.15f, samplesXyw[s].z);
                 float ink = Mathf.SmoothStep(0f, 1f, (arc - arc0 - 0.2f * _th0) / (0.4f * _th0 + 1e-3f));
-                AddBarkSection(point, tangent, width, arc, BarkAge(width, true, style), ink, Color.white);
+                AddBarkSection(point, tangent, width, arc, 1f, ink, new Color(tone, tone, tone, 1f)); // TA: barkAge 1 (bark_trunk only), tone per root
                 previous = point;
             }
             AddRibbonIndices(start, samples + 1);
@@ -282,9 +285,11 @@ namespace PocketArbor.DevTools.GrowthPreview
             {
                 int root = (int)_padOrder[p].z;
                 _padPuffs.Clear();
-                if (_shape.PadSize(root) >= growth.PadFullNodes) AddPadCluster(root, foliage, growth, style, atlas, seed, fresh);
+                bool dome = IsDomePad(root);
+                if (_shape.PadSize(root) >= growth.PadFullNodes) AddPadCluster(root, foliage, growth, style, atlas, seed, fresh, dome);
                 else AddPadTufts(root, foliage, growth, style, atlas, seed, fresh);
                 if (_padPuffs.Count == 0) continue;
+                CoverPadTips(root, foliage, style, atlas, seed);
                 _padKeys.Add(_padOrder[p].x);
                 EmitPad(style);
             }
@@ -295,7 +300,7 @@ namespace PocketArbor.DevTools.GrowthPreview
         /// a row of n = ceil(width / max sprite width) along the pad's slope line, plus narrower rows on top while the union
         /// is taller than one row (apex dome). Variant/mirroring hash = (Seed, Id of the pad root, slot).
         /// </summary>
-        void AddPadCluster(int root, FoliageConfig foliage, GrowthConfig growth, TexturedStyleConfig style, PadAtlas atlas, uint seed, float fresh)
+        void AddPadCluster(int root, FoliageConfig foliage, GrowthConfig growth, TexturedStyleConfig style, PadAtlas atlas, uint seed, float fresh, bool dome)
         {
             float minX = float.MaxValue, maxX = float.MinValue, top = float.MinValue, bottom = float.MaxValue, meanRy = 0f;
             float sx = 0f, sy = 0f, sxx = 0f, sxy = 0f;
@@ -334,7 +339,10 @@ namespace PocketArbor.DevTools.GrowthPreview
             int columns = Mathf.Max(1, Mathf.CeilToInt(width / maxSprite - 0.15f));
             float spriteWidth = width / columns * (columns > 1 ? style.PadClusterOverlap : style.PadSingleCover);
             float unionHeight = top - bottom;
-            for (int row = 0; row < style.PadMaxRows; row++)
+            // ⚑P BALANCE §1.3.4: ≤ PadMaxRowsSide rows for a side pad (Kuromatsu 1), ≤ PadMaxRowsDome for the apex dome.
+            int maxRows = Mathf.Min(style.PadMaxRows, dome ? foliage.PadMaxRowsDome : foliage.PadMaxRowsSide);
+            float rowLift = dome ? style.PadDomeRowLift : style.PadRowLift;
+            for (int row = 0; row < maxRows; row++)
             {
                 int count = Mathf.Max(1, columns - row);
                 float rowWidth = spriteWidth * Mathf.Pow(style.PadRowShrink, row);
@@ -343,20 +351,23 @@ namespace PocketArbor.DevTools.GrowthPreview
                 for (int j = 0; j < count; j++)
                 {
                     float x = rowMin + (j + 0.5f) * span / count;
-                    float y = intercept + slope * x - meanRy * style.PadLift + row * style.PadRowLift * rowWidth;
-                    AddClusterSprite(atlas, seed, _nodes[root].Id, row * 16 + j, new Vector2(x, y), rowWidth, foliage.PuffRadius, style, brightness);
+                    float y = intercept + slope * x - meanRy * style.PadLift + row * rowLift * rowWidth;
+                    AddClusterSprite(atlas, seed, _nodes[root].Id, row * 16 + j, new Vector2(x, y), rowWidth, foliage.PuffRadius, style, brightness,
+                        dome && row == 0 && j == count / 2);
                 }
                 // Next row only while the union is taller than what the rows so far cover.
-                float covered = rowWidth * 0.45f + row * style.PadRowLift * rowWidth;
+                float covered = rowWidth * 0.45f + row * rowLift * rowWidth;
                 if (covered >= unionHeight * style.PadHeightCover) break;
             }
         }
 
-        void AddClusterSprite(PadAtlas atlas, uint seed, int id, int slot, Vector2 anchor, float width, float puffRadius, TexturedStyleConfig style, float brightness)
+        void AddClusterSprite(PadAtlas atlas, uint seed, int id, int slot, Vector2 anchor, float width, float puffRadius, TexturedStyleConfig style,
+            float brightness, bool dome = false)
         {
             PadSizeClass size = width >= style.PadLargeMinRadii * puffRadius ? PadSizeClass.L
                 : width >= style.PadMediumMinRadii * puffRadius ? PadSizeClass.M : PadSizeClass.S;
-            PadSprite sprite = atlas.Pick(size, Hash01(seed, id, 500u + (uint)slot));
+            float hash = Hash01(seed, id, 500u + (uint)slot);
+            PadSprite sprite = dome && size == PadSizeClass.L ? atlas.PickDome(hash) : atlas.Pick(size, hash);
             bool mirrored = Hash01(seed, id, 600u + (uint)slot) >= 0.5f;
             _padPuffs.Add(new Puff
             {
@@ -370,6 +381,71 @@ namespace PocketArbor.DevTools.GrowthPreview
             });
             _puffRecords.Add(new PuffRecord(id, slot, sprite.Uv, mirrored, size));
         }
+
+        /// <summary>
+        /// ⚑P BALANCE §1.3.4: the apex dome = the pad holding the crown axis or a trunk-chain node, or growing from the crown axis
+        /// or from the chain top (k4 laterals before the crown axis grows).
+        /// </summary>
+        bool IsDomePad(int root)
+        {
+            int parent = _nodes[root].ParentIndex;
+            if (parent >= 0 && (_shape.IsCrownAxis(parent) || (_shape.IsTrunkChain(parent) && _nodes[parent].Depth == _chainTopDepth))) return true;
+            for (int i = root; i < _count; i++)
+            {
+                if (_shape.PadId(i) == root && (_shape.IsCrownAxis(i) || _shape.IsTrunkChain(i))) return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// ⚑P BALANCE §1.3.4 / ADR-0004 rev.3 §2 tip coverage: every tip of an InPad node of the pad with LeafScale ≥ 0.5 must lie in
+        /// the solid ellipse of one of the pad's sprites; an uncovered tip gets one S sprite centred on it (≤ PadExtraSpritesMax per pad,
+        /// overflow counted in <see cref="LastTipOverflow"/>).
+        /// </summary>
+        void CoverPadTips(int root, FoliageConfig foliage, TexturedStyleConfig style, PadAtlas atlas, uint seed)
+        {
+            int extra = 0;
+            for (int i = root; i < _count; i++)
+            {
+                if (_shape.PadId(i) != root || !_shape.InPad(i) || _nodes[i].LeafScale < 0.5f) continue;
+                Vector2 tip = _tip[i];
+                if (TipCovered(tip, style)) continue;
+                if (extra >= style.PadExtraSpritesMax)
+                {
+                    LastTipOverflow++;
+                    continue;
+                }
+                float width = style.PadTipSpriteRadii * foliage.PuffRadius;
+                int slot = 200 + extra;
+                PadSprite sprite = atlas.Pick(PadSizeClass.S, Hash01(seed, _nodes[i].Id, 500u + (uint)slot));
+                float height = width * sprite.Aspect;
+                Vector2 anchor = tip + new Vector2((sprite.Pivot.x - 0.5f) * width, (sprite.Pivot.y - style.PadSolidCenterY) * height);
+                AddClusterSprite(atlas, seed, _nodes[i].Id, slot, anchor, width, foliage.PuffRadius, style, 0f);
+                extra++;
+            }
+            LastExtraTipSprites += extra;
+        }
+
+        bool TipCovered(Vector2 tip, TexturedStyleConfig style)
+        {
+            for (int q = 0; q < _padPuffs.Count; q++)
+            {
+                Puff p = _padPuffs[q];
+                float pivotX = p.Mirrored ? 1f - p.Sprite.Pivot.x : p.Sprite.Pivot.x;
+                float cx = p.Anchor.x + (0.5f - pivotX) * p.Width;
+                float cy = p.Anchor.y + (style.PadSolidCenterY - p.Sprite.Pivot.y) * p.Height;
+                float dx = (tip.x - cx) / (style.PadSolidRadiusX * p.Width);
+                float dy = (tip.y - cy) / (style.PadSolidRadiusY * p.Height);
+                if (dx * dx + dy * dy <= 1f) return true;
+            }
+            return false;
+        }
+
+        /// <summary>Tips that stayed uncovered because the pad hit PadExtraSpritesMax (last textured build; AC harness).</summary>
+        public int LastTipOverflow { get; private set; }
+
+        /// <summary>Extra S sprites added to cover tips (last textured build).</summary>
+        public int LastExtraTipSprites { get; private set; }
 
         /// <summary>Small pad (PadSize &lt; PadFullNodes): separate tufts — one small sprite per node at its tip (§1.2.5).</summary>
         void AddPadTufts(int root, FoliageConfig foliage, GrowthConfig growth, TexturedStyleConfig style, PadAtlas atlas, uint seed, float fresh)

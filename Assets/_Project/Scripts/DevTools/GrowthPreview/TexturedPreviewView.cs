@@ -98,6 +98,22 @@ namespace PocketArbor.DevTools.GrowthPreview
         /// <summary>World rect covered by the reference image (aligned by the pot) after the last rebuild.</summary>
         public Rect OverlayRect => _overlayRect;
 
+        /// <summary>World rect of the pot sprite after the last rebuild (yMax = top of the back rim, the y = 1068 px of the reference).</summary>
+        public Rect PotRect { get; private set; }
+
+        /// <summary>Shows only the tree layers (bark, pads) — for the AC mask harness (transparent clear).</summary>
+        public void SetTreeOnly(bool treeOnly, bool showBark = true, bool showPads = true)
+        {
+            _background.Go.SetActive(!treeOnly);
+            _soil.Go.SetActive(!treeOnly);
+            _pot.Go.SetActive(!treeOnly);
+            _soilFront.Go.SetActive(!treeOnly);
+            _bark.Go.SetActive(!treeOnly || showBark);
+            _pads.Go.SetActive(!treeOnly || showPads);
+            if (treeOnly) _overlay.Renderer.enabled = false;
+            else SetOverlay(_overlayOn, _overlayAlpha);
+        }
+
         /// <summary>Pot outer rim in world units (x-extent) after the last rebuild.</summary>
         public float PotOuterLeft { get; private set; }
         public float PotOuterRight { get; private set; }
@@ -171,10 +187,11 @@ namespace PocketArbor.DevTools.GrowthPreview
 
             Bounds bounds = builder.BuildTextured(tree, _bark.Mesh, _pads.Mesh, model.Config, model.SpeciesConfig, Style, atlas);
 
-            // Pot: front inner width → preview pot width P; the trunk base (y = 0) sits TreeBaseInOpening of the way from the
-            // front to the back inner edge of the opening; centred on the opening.
+            // Pot: ⚑P BALANCE §1.3.0 — the outer front rim is P = TreeRenderConfig.PotWidthUnits (fixed 92 units, like the 566 px
+            // of the reference); the trunk base (y = 0) sits TreeBaseInOpening of the way from the front to the back inner edge of the
+            // opening; centred on the opening.
             PotArt pot = art.Pot;
-            float upp = builder.LastPotWidth / Mathf.Max(1f, pot.InnerRight - pot.InnerLeft); // world units per pot pixel
+            float upp = builder.LastPotWidth / Mathf.Max(1f, pot.OuterRight - pot.OuterLeft); // world units per pot pixel
             float baseY = pot.BaseY(Style.TreeBaseInOpening);
             float left = -0.5f * (pot.InnerLeft + pot.InnerRight) * upp;
             var potRect = new Rect(left, -baseY * upp, pot.Width * upp, pot.Height * upp);
@@ -225,6 +242,7 @@ namespace PocketArbor.DevTools.GrowthPreview
             else _overlayRect = new Rect(0f, 0f, 0f, 0f);
             SetOverlay(_overlayOn, _overlayAlpha);
 
+            PotRect = potRect;
             bounds.Encapsulate(new Vector3(potRect.xMin, potRect.yMin, 0f));
             bounds.Encapsulate(new Vector3(potRect.xMax, potRect.yMax, 0f));
             return bounds;

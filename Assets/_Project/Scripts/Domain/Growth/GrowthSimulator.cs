@@ -184,6 +184,7 @@ namespace PocketArbor.Domain.Growth
                 ShootDraws u = ShootDraws.Next(_rng);
                 double selectionSum = ComputeSelectionWeights(tree, species, candidateCount);
                 int parentIndex = PickParent(candidateCount, u.U1 * selectionSum);
+                if (parentIndex < 0) continue; // Σs = 0: the shoot burns, its 8 draws are spent (stream layout kept).
                 NodeData shoot = ShootBuilder.Build(tree, parentIndex, in u, cfg, species);
                 tree.Append(shoot);
             }
@@ -218,20 +219,32 @@ namespace PocketArbor.Domain.Growth
         }
 
         /// <summary>
-        /// ⚑ BALANCE §1.2.7: selection weights s_i = w_i · RoleWeight_i, roles recomputed before every shoot.
-        /// Returns Σs. The rate (step 6.2) still uses Σw.
+        /// ⚑ BALANCE §1.2.7 / ⚑P §1.3.1, §1.3.4, §1.3.5: selection weights s_i = w_i · RoleWeight_i · BackBud_i, roles recomputed
+        /// before every shoot. Returns Σs. The rate (step 6.2) still uses Σw.
+        /// Roles: trunk chain without an apical child — ApicalDominanceWeight once the apical delay has passed, else TierWeight if a
+        /// lateral slot is free, else 0; trunk chain with an apical child — TierWeight; otherwise InPad ? PadWeight : InteriorWeight
+        /// (the crown axis too, but 0 while its apical delay lasts and both lateral slots are taken).
+        /// BackBud_i = BackBudWeightMultiplier when BackBudDist ≤ BackBudRadiusEdges ∧ ord ≥ 1, else 1.
         /// </summary>
         double ComputeSelectionWeights(TreeGraph tree, SpeciesConfig species, int candidateCount)
         {
             GrowthConfig cfg = _config;
-            _shape.Analyze(tree.Nodes, cfg.TrunkChainSegments, species.PadDepth);
+            ReadOnlySpan<NodeData> nodes = tree.Nodes;
+            _shape.Analyze(nodes, TreeShapeAnalysis.Params(tree, cfg, species));
+            int lateralSlots = cfg.MaxChildrenPerNode - 1;
             double sum = 0.0;
             for (int c = 0; c < candidateCount; c++)
             {
                 int i = _candidates[c];
+                bool axis = _shape.Order(i) == 0;
+                // An ord-0 node without an apical child whose delay still lasts can only take a lateral (BALANCE §1.3.1).
+                bool lateralOnly = axis && _shape.ApicalChild(i) < 0 && ShootBuilder.IsApicalDelayed(in nodes[i], cfg);
+                bool slotFree = _shape.ChildCount(i) - (_shape.ApicalChild(i) >= 0 ? 1 : 0) < lateralSlots;
                 double role;
-                if (_shape.IsTrunkChain(i)) role = _shape.ApicalChild(i) < 0 ? cfg.ApicalDominanceWeight : cfg.TierWeight;
-                else role = _shape.TipDistance(i) <= species.PadDepth ? cfg.PadWeight : cfg.InteriorWeight;
+                if (lateralOnly && !slotFree) role = 0.0;
+                else if (_shape.IsTrunkChain(i)) role = _shape.ApicalChild(i) < 0 && !lateralOnly ? cfg.ApicalDominanceWeight : cfg.TierWeight;
+                else role = _shape.InPad(i) ? cfg.PadWeight : cfg.InteriorWeight;
+                if (!axis && _shape.BackBudDist(i) <= cfg.BackBudRadiusEdges) role *= cfg.BackBudWeightMultiplier;
                 double s = _weights[c] * role;
                 _selectionWeights[c] = s;
                 sum += s;
@@ -239,17 +252,23 @@ namespace PocketArbor.Domain.Growth
             return sum;
         }
 
-        /// <summary>First candidate whose cumulative selection weight exceeds <paramref name="threshold"/> = u1·Σs.</summary>
+        /// <summary>
+        /// First candidate whose cumulative selection weight exceeds <paramref name="threshold"/> = u1·Σs; −1 when Σs = 0
+        /// (the shoot burns, BALANCE §1.3.1).
+        /// </summary>
         int PickParent(int candidateCount, double threshold)
         {
             double cumulative = 0.0;
+            int lastPositive = -1;
             for (int i = 0; i < candidateCount; i++)
             {
+                if (!(_selectionWeights[i] > 0.0)) continue;
+                lastPositive = i;
                 cumulative += _selectionWeights[i];
                 if (cumulative > threshold) return _candidates[i];
             }
-            // BALANCE §1.1: interpretation — floating-point rounding fallback: the last candidate.
-            return _candidates[candidateCount - 1];
+            // BALANCE §1.1: interpretation — floating-point rounding fallback: the last candidate (with a positive weight).
+            return lastPositive >= 0 ? _candidates[lastPositive] : -1;
         }
     }
 }

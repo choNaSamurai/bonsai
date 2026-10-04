@@ -46,7 +46,11 @@ namespace PocketArbor.Domain.Tree
             if (index < 0) return new PruneResult(PruneStatus.NotFound, 0, -1);
             if (index == 0 || tree.Nodes[index].Depth == 0) return new PruneResult(PruneStatus.TrunkProtected, 0, -1);
 
+            // BALANCE §1.3.5: the parent of the cut node remembers the day of the cut (back-budding, callus).
+            // Parents precede children, so compaction does not move it.
+            int parent = tree.Nodes[index].ParentIndex;
             int removed = tree.RemoveSubtreeAt(index);
+            tree.NodeAt(parent).LastCutDay = tree.Growth.GrowthDayIndex;
             int phoenixId = tree.Count == 1 ? SpawnPhoenix(tree, config) : -1;
             tree.MarkChanged();
             return new PruneResult(PruneStatus.Pruned, removed, phoenixId);
@@ -74,6 +78,7 @@ namespace PocketArbor.Domain.Tree
                 LeafScale = 0f,
                 BranchSide = 0,
                 AttachT = 1.0,
+                LastCutDay = NodeData.NoCut,
             });
             return tree.Nodes[index].Id;
         }

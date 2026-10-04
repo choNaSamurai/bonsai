@@ -214,7 +214,8 @@ namespace PocketArbor.Domain.Tests.Growth
             Assert.AreEqual(new[] { 0.70, 0.90, 0.50, 0.30 },
                 new[] { c.SegmentTipTaper, c.ApicalThicknessRatio, c.LateralThicknessRatio, c.MinShootThickness });
             Assert.AreEqual(5, c.TrunkChainSegments);
-            Assert.AreEqual(new[] { 0.85, 3.0, 0.10, 0.70, 45.0 },
+            // ⚑P BALANCE §1.3.1: TrunkSwayDecay 0.85 → 0.88.
+            Assert.AreEqual(new[] { 0.88, 3.0, 0.10, 0.70, 45.0 },
                 new[] { c.TrunkSwayDecay, c.TrunkSwayJitterDeg, c.TrunkCurvatureJitter, c.OrderLengthFactor, c.ArcUpMinWorldAngleDeg });
             Assert.AreEqual(new[] { 2.5, 1.5, 1.0, 0.25 }, new[] { c.ApicalDominanceWeight, c.TierWeight, c.PadWeight, c.InteriorWeight });
             Assert.AreEqual(4, c.PadFullNodes);
@@ -262,9 +263,10 @@ namespace PocketArbor.Domain.Tests.Growth
             Assert.AreEqual(new[] { 0.28, 30.0, 10.0, 0.20 }, new[] { m.KBase, m.BranchAngleMeanDeg, m.BranchAngleSpreadDeg, m.CurvatureSpread });
             Assert.AreEqual(new[] { 0.22, 35.0, 20.0, 0.30 }, new[] { y.KBase, y.BranchAngleMeanDeg, y.BranchAngleSpreadDeg, y.CurvatureSpread });
             // BALANCE §1.2.3 / §1.2.5 / §1.2.6: primary angle, spread, sway, droop.
-            Assert.AreEqual(new[] { 80.0, 6.0, 14.0, 0.50 }, new[] { k.PrimaryAngleMeanDeg, k.PrimaryAngleSpreadDeg, k.TrunkSwayDeg, k.BranchDroop });
-            Assert.AreEqual(new[] { 62.0, 10.0, 9.0, 0.20 }, new[] { m.PrimaryAngleMeanDeg, m.PrimaryAngleSpreadDeg, m.TrunkSwayDeg, m.BranchDroop });
-            Assert.AreEqual(new[] { 70.0, 10.0, 12.0, 0.30 }, new[] { y.PrimaryAngleMeanDeg, y.PrimaryAngleSpreadDeg, y.TrunkSwayDeg, y.BranchDroop });
+            // ⚑P BALANCE §1.3.1: TrunkSwayDeg 32 / 30 / 26 (was 14 / 9 / 12).
+            Assert.AreEqual(new[] { 80.0, 6.0, 32.0, 0.50 }, new[] { k.PrimaryAngleMeanDeg, k.PrimaryAngleSpreadDeg, k.TrunkSwayDeg, k.BranchDroop });
+            Assert.AreEqual(new[] { 62.0, 10.0, 30.0, 0.20 }, new[] { m.PrimaryAngleMeanDeg, m.PrimaryAngleSpreadDeg, m.TrunkSwayDeg, m.BranchDroop });
+            Assert.AreEqual(new[] { 70.0, 10.0, 26.0, 0.30 }, new[] { y.PrimaryAngleMeanDeg, y.PrimaryAngleSpreadDeg, y.TrunkSwayDeg, y.BranchDroop });
             Assert.AreEqual(new[] { 1, 2, 2 }, new[] { k.PadDepth, m.PadDepth, y.PadDepth });
         }
     }

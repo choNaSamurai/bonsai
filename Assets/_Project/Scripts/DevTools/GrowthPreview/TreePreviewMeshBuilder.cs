@@ -39,6 +39,7 @@ namespace PocketArbor.DevTools.GrowthPreview
         readonly List<int> _indices = new List<int>(98304);
         readonly List<Vector4> _puffs = new List<Vector4>(256); // cx, cy, rx, ry
         readonly List<Vector2> _trunkSamples = new List<Vector2>(256); // (y, width) along the trunk chain
+        readonly List<Vector3> _rootSamples = new List<Vector3>(32); // (x, y, width) of one Nebari root
 
         readonly Vector2[] _dir = new Vector2[TreeGraph.Capacity];
         readonly Vector2[] _base = new Vector2[TreeGraph.Capacity];
@@ -52,8 +53,30 @@ namespace PocketArbor.DevTools.GrowthPreview
         bool _linear;
         float _th0;
         float _flare;
+        float _puffRadius;
+        int _chainTopDepth;
 
         public TreeRenderConfig Render => _render;
+
+        // ---- Read access for the PA-102P measurement harness (last build) ----
+        public TreeShapeAnalysis Shape => _shape;
+        public int NodeCount => _count;
+        public NodeData Node(int i) => _nodes[i];
+        public Vector2 TipOf(int i) => _tip[i];
+        public Vector2 PointOn(int i, float t) => Eval(i, t);
+
+        /// <summary>Centre line of the trunk chain (C1 spline of #0 … the chain top, BALANCE §1.3.1 «Вимір вигинів»), dense samples.</summary>
+        public void TrunkAxis(List<Vector2> points, int samplesPerNode = 32)
+        {
+            points.Clear();
+            int i = 0;
+            while (i >= 0 && i < _count && _shape.IsTrunkChain(i))
+            {
+                for (int s = points.Count == 0 ? 0 : 1; s <= samplesPerNode; s++) points.Add(Eval(i, s / (float)samplesPerNode));
+                int next = _shape.ApicalChild(i);
+                i = next >= 0 && _shape.IsTrunkChain(next) ? next : -1;
+            }
+        }
 
         /// <summary>AC20: base width with Nebari flare / trunk width at 2/3 of the trunk-chain height (last build).</summary>
         public float LastTaperRatio { get; private set; }
@@ -63,6 +86,9 @@ namespace PocketArbor.DevTools.GrowthPreview
         /// <summary>PA-102S proportions (last build, units): tree height above the Pot Lip incl. foliage.</summary>
         public float LastHeight { get; private set; }
 
+        /// <summary>Bark + foliage extents (roots and pot excluded) of the last build — camera framing (TD-030).</summary>
+        public Rect LastTreeRect { get; private set; }
+
         /// <summary>Crown width: x-extent of bark + foliage (roots and pot excluded).</summary>
         public float LastCrownWidth { get; private set; }
 
@@ -70,8 +96,14 @@ namespace PocketArbor.DevTools.GrowthPreview
         public float LastTrunkBase { get; private set; }
         public float LastTrunkBaseFlared { get; private set; }
 
-        /// <summary>Preview pot width (a prototype choice: clamp(0.62·crown, 60, 170) — the model has no pot size).</summary>
+        /// <summary>⚑P BALANCE §1.3.0: pot width P (outer front rim) = TreeRenderConfig.PotWidthUnits (fixed, 92 units).</summary>
         public float LastPotWidth { get; private set; }
+
+        /// <summary>Nebari roots drawn by the last build (BALANCE §1.3.3).</summary>
+        public int LastRootCount { get; private set; }
+
+        /// <summary>Nebari flare F of the last build: base width = th0·(1 + F).</summary>
+        public float LastFlare => _flare;
 
         public static Color32 LeafColor(SpeciesId species)
         {
@@ -121,6 +153,7 @@ namespace PocketArbor.DevTools.GrowthPreview
             }
             LastHeight = maxY;
             LastCrownWidth = maxX > minX ? maxX - minX : 0f;
+            LastTreeRect = maxX > minX ? Rect.MinMaxRect(minX, 0f, maxX, maxY) : new Rect(0f, 0f, 0f, 0f);
             LastTrunkBase = _th0;
             LastTrunkBaseFlared = _th0 * (1f + _flare);
 
@@ -150,8 +183,14 @@ namespace PocketArbor.DevTools.GrowthPreview
 
             ComputeGeometry();
             FoliageConfig foliage = FoliageConfig.For(tree.Genome.Species);
-            Rect treeRect = TreeExtents(foliage);
-            LastPotWidth = Mathf.Clamp(treeRect.width * 0.62f, 60f, 170f);
+            _puffRadius = foliage.PuffRadius;
+            _chainTopDepth = 0;
+            for (int i = 0; i < _count; i++)
+            {
+                if (_shape.IsTrunkChain(i) && _nodes[i].Depth > _chainTopDepth) _chainTopDepth = _nodes[i].Depth;
+            }
+            LastPotWidth = _render.PotWidthUnits;
+            LastRootCount = NebariRootCount(growth);
             return foliage;
         }
 
@@ -228,16 +267,18 @@ namespace PocketArbor.DevTools.GrowthPreview
             return Mathf.Max(0.3f, width);
         }
 
-        Rect TreeExtents(FoliageConfig foliage)
+        /// <summary>
+        /// ⚑P BALANCE §1.3.4 [RENDER]: share of node <paramref name="i"/> covered by bark — a bud shows ≤ BudBarkMaxLength; a terminal
+        /// InPad node of ord ≥ 2 ends PadTwigInsetRatio·PuffRadius before its tip (inside the pad). Otherwise 1.
+        /// </summary>
+        public float BarkEndT(int i)
         {
-            float minX = -10f, maxX = 10f;
-            float pad = foliage.PuffRadius * foliage.PuffWidthRatio;
-            for (int i = 0; i < _count; i++)
-            {
-                minX = Mathf.Min(minX, Mathf.Min(_base[i].x, _tip[i].x) - pad);
-                maxX = Mathf.Max(maxX, Mathf.Max(_base[i].x, _tip[i].x) + pad);
-            }
-            return Rect.MinMaxRect(minX, 0f, maxX, 1f);
+            NodeData node = _nodes[i];
+            float length = Mathf.Max(1e-4f, (float)node.Length);
+            if (node.Status == NodeStatus.Bud) return Mathf.Clamp01(_render.BudBarkMaxLength / length);
+            if (_shape.InPad(i) && _shape.Order(i) >= 2 && _shape.ApicalChild(i) < 0)
+                return Mathf.Clamp01(1f - _render.PadTwigInsetRatio * _puffRadius / length);
+            return 1f;
         }
 
         // ---- Bark -------------------------------------------------------------------------------------
@@ -248,9 +289,10 @@ namespace PocketArbor.DevTools.GrowthPreview
             bool trunkChain = _shape.IsTrunkChain(i);
             int start = _vertices.Count;
             Vector2 previous = Eval(i, 0f);
+            float tEnd = BarkEndT(i);
             for (int s = 0; s <= SegmentSamples; s++)
             {
-                float t = s / (float)SegmentSamples;
+                float t = tEnd * s / SegmentSamples;
                 Vector2 point = Eval(i, t);
                 Vector2 ahead = Eval(i, Mathf.Min(1f, t + 0.01f));
                 Vector2 behind = Eval(i, Mathf.Max(0f, t - 0.01f));
@@ -293,60 +335,111 @@ namespace PocketArbor.DevTools.GrowthPreview
             return 0f;
         }
 
-        // ---- Nebari roots (BALANCE §1.2.4) --------------------------------------------------------------
+        // ---- Nebari roots (⚑P BALANCE §1.3.3) --------------------------------------------------------------
 
         void AddNebariRoots(uint seed, GrowthConfig growth)
         {
             int count = NebariRootCount(growth);
+            LastRootCount = count;
             for (int r = 0; r < count; r++)
             {
-                NebariRoot(seed, r, count, out Vector2 start, out Vector2 control, out Vector2 end, out float thickness);
-                AddTaperedQuadratic(start, control, end, thickness, Bark, BarkDark);
+                NebariRoot(seed, r, count, _rootSamples);
+                AddRootRibbon(_rootSamples, Bark, BarkDark);
             }
         }
 
-        int NebariRootCount(GrowthConfig growth) =>
-            Mathf.Clamp(Mathf.RoundToInt(_render.NebariRootsMin + (_th0 - (float)growth.TrunkInitialThickness) / _render.NebariThicknessPerRoot),
-                _render.NebariRootsMin, _render.NebariRootsMax);
+        /// <summary>clamp(round(min + (th0 − th_init) / perRoot), min, max), round half away from zero (ADR-0004 rev.3 §1).</summary>
+        public int NebariRootCount(GrowthConfig growth) =>
+            Mathf.Clamp((int)Math.Round(_render.NebariRootsMin + (_th0 - growth.TrunkInitialThickness) / _render.NebariThicknessPerRoot,
+                MidpointRounding.AwayFromZero), _render.NebariRootsMin, _render.NebariRootsMax);
 
-        /// <summary>Root r of <paramref name="count"/>: quadratic Bezier (start on the flared base → end on the soil) and base thickness.</summary>
-        void NebariRoot(uint seed, int r, int count, out Vector2 start, out Vector2 control, out Vector2 end, out float thickness)
+        /// <summary>
+        /// Root r of <paramref name="count"/> as samples (x, y, width) (BALANCE §1.3.3): two C1 cubic segments — from the flared
+        /// base down-outwards at NebariRootDrop (35…55° below horizontal, hash), then easing to near-horizontal and ending below the
+        /// SoilFront ground line (hidden by moss); a cross wave of NebariRootWaviness·th0 (one period, hashed phase); width from the
+        /// base thickness (0.30…0.42·th0, alternating) to NebariRootTipRatio of it. Fan = slot table × 75° ± 10°; front roots (|fan| ≤ 25°)
+        /// × 0.6 shorter. Long/short and thick/thin alternate by index; everything else hashes (Seed, Id #0, salt) — not the PCG stream.
+        /// </summary>
+        public void NebariRoot(uint seed, int r, int count, List<Vector3> samples)
         {
+            samples.Clear();
             float th0 = _th0;
             int trunkId = _nodes[0].Id;
-            float frac = count == 1 ? 0.5f : r / (float)(count - 1);
-            float angle = Mathf.Lerp(-_render.NebariFanDeg, _render.NebariFanDeg, frac)
+            // ADR-0004 rev.3 §1: fan slot table by index → a new root does not shift the existing ones.
+            float[] slots = _render.NebariFanSlots;
+            float fan = slots[r % slots.Length] * _render.NebariFanDeg
                 + _render.NebariFanJitterDeg * (2f * Hash01(seed, trunkId, 101u + (uint)r) - 1f);
-            float h = Hash01(seed, trunkId, 211u + (uint)r);
-            float lengthFactor = (r & 1) == 0
-                ? Mathf.Lerp(_render.NebariRootLengthMin, _render.NebariRootLengthMax, 0.6f + 0.4f * h)
-                : Mathf.Lerp(_render.NebariRootLengthMin, _render.NebariRootLengthMax, 0.4f * h);
-            float length = th0 * lengthFactor;
-            thickness = _render.NebariRootThicknessRatio * th0;
-            float sin = Mathf.Sin(angle * Mathf.Deg2Rad);
+            float sin = Mathf.Sin(fan * Mathf.Deg2Rad);
+            float dir = fan < 0f ? -1f : 1f;
+            bool front = Mathf.Abs(fan) <= _render.NebariFrontRootDeg;
 
-            // Roots leave the flared base above the soil and arch down onto it (Y ∈ [soil, soil + 0.35·th0]).
-            start = new Vector2(sin * th0 * 0.45f, thickness * 1.1f);
-            end = new Vector2(start.x + sin * length, -0.3f);
-            control = new Vector2(Mathf.Lerp(start.x, end.x, 0.25f), thickness * 0.75f);
+            float h = Hash01(seed, trunkId, 211u + (uint)r);
+            bool even = (r & 1) == 0;
+            float lengthFactor = Mathf.Lerp(_render.NebariRootLengthMin, _render.NebariRootLengthMax, even ? 0.6f + 0.4f * h : 0.4f * h);
+            float length = th0 * lengthFactor * (front ? _render.NebariFrontRootScale : 1f);
+            float hw = Hash01(seed, trunkId, 223u + (uint)r);
+            float baseWidth = th0 * Mathf.Lerp(_render.NebariRootThicknessMin, _render.NebariRootThicknessMax, even ? 0.55f + 0.45f * hw : 0.45f * hw);
+            float drop = Mathf.Lerp(_render.NebariRootDropMinDeg, _render.NebariRootDropMaxDeg, Hash01(seed, trunkId, 227u + (uint)r)) * Mathf.Deg2Rad;
+            float endDrop = _render.NebariRootEndDropDeg * Mathf.Deg2Rad;
+            float phase = Hash01(seed, trunkId, 229u + (uint)r) * Mathf.PI * 2f;
+
+            // Projected horizontal reach: roots facing the viewer show less of their length sideways.
+            float reach = length * Mathf.Max(0.35f, Mathf.Abs(sin));
+            float flareHalf = 0.5f * th0 * (1f + _flare);
+            var p0 = new Vector2(sin * flareHalf * 0.75f, _render.NebariRootStartHeight * th0);
+            var p2 = new Vector2(p0.x + dir * reach, -_render.NebariRootEndDepth);
+            float knee = Mathf.Clamp(_render.NebariRootKnee, 0.1f, 0.9f);
+            float kneeY = p2.y + (1f - knee) * reach * Mathf.Tan(2f * endDrop);
+            kneeY = Mathf.Min(kneeY, p0.y - 0.2f * (p0.y - p2.y));
+            var p1 = new Vector2(p0.x + dir * knee * reach, kneeY);
+            var t0 = new Vector2(dir * Mathf.Cos(drop), -Mathf.Sin(drop));
+            var t2 = new Vector2(dir * Mathf.Cos(endDrop), -Mathf.Sin(endDrop));
+            Vector2 t1 = ((p1 - p0).normalized + (p2 - p1).normalized).normalized;
+
+            const int perSegment = 8;
+            int total = 2 * perSegment;
+            for (int k = 0; k <= total; k++)
+            {
+                bool first = k <= perSegment;
+                float u = first ? k / (float)perSegment : (k - perSegment) / (float)perSegment;
+                Vector2 point = first ? Hermite(p0, t0, p1, t1, u) : Hermite(p1, t1, p2, t2, u);
+                Vector2 tangent = first ? HermiteTangent(p0, t0, p1, t1, u) : HermiteTangent(p1, t1, p2, t2, u);
+                tangent = tangent.sqrMagnitude > 1e-8f ? tangent.normalized : new Vector2(dir, 0f);
+                float t = k / (float)total;
+                float wave = _render.NebariRootWaviness * th0 * Mathf.Sin(2f * Mathf.PI * t + phase) * Mathf.Sin(Mathf.PI * t);
+                point += new Vector2(-tangent.y, tangent.x) * wave;
+                float width = baseWidth * Mathf.Lerp(1f, _render.NebariRootTipRatio, t);
+                samples.Add(new Vector3(point.x, point.y, width));
+            }
         }
 
-        void AddTaperedQuadratic(Vector2 a, Vector2 c, Vector2 b, float startWidth, Color32 top, Color32 bottom)
+        static Vector2 Hermite(Vector2 a, Vector2 ta, Vector2 b, Vector2 tb, float u)
         {
-            const int samples = 10;
+            float scale = (b - a).magnitude;
+            float u2 = u * u, u3 = u2 * u;
+            return (2f * u3 - 3f * u2 + 1f) * a + (u3 - 2f * u2 + u) * scale * ta + (-2f * u3 + 3f * u2) * b + (u3 - u2) * scale * tb;
+        }
+
+        static Vector2 HermiteTangent(Vector2 a, Vector2 ta, Vector2 b, Vector2 tb, float u)
+        {
+            float scale = (b - a).magnitude;
+            float u2 = u * u;
+            return (6f * u2 - 6f * u) * a + (3f * u2 - 4f * u + 1f) * scale * ta + (-6f * u2 + 6f * u) * b + (3f * u2 - 2f * u) * scale * tb;
+        }
+
+        void AddRootRibbon(List<Vector3> samples, Color32 top, Color32 bottom)
+        {
             int start = _vertices.Count;
-            for (int s = 0; s <= samples; s++)
+            for (int s = 0; s < samples.Count; s++)
             {
-                float t = s / (float)samples;
-                float u = 1f - t;
-                Vector2 point = u * u * a + 2f * u * t * c + t * t * b;
-                Vector2 tangent = 2f * u * (c - a) + 2f * t * (b - c);
+                Vector2 point = samples[s];
+                Vector2 tangent = (Vector2)samples[Mathf.Min(samples.Count - 1, s + 1)] - (Vector2)samples[Mathf.Max(0, s - 1)];
                 tangent = tangent.sqrMagnitude > 1e-8f ? tangent.normalized : Vector2.right;
-                Vector2 side = new Vector2(-tangent.y, tangent.x) * (startWidth * 0.5f * (1f - t * 0.92f));
+                Vector2 side = new Vector2(-tangent.y, tangent.x) * (samples[s].z * 0.5f);
                 AddVertex(point + side, top);
                 AddVertex(point - side, bottom);
             }
-            for (int s = 0; s < samples; s++)
+            for (int s = 0; s < samples.Count - 1; s++)
             {
                 int i = start + s * 2;
                 _indices.Add(i); _indices.Add(i + 1); _indices.Add(i + 2);

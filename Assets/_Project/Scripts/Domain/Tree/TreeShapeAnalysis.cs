@@ -4,15 +4,18 @@ using PocketArbor.Domain.Growth;
 namespace PocketArbor.Domain.Tree
 {
     /// <summary>
-    /// [MODEL-derived] bonsai-shape terms of BALANCE §1.2.0 / §1.2.5, computed from a node table in O(n) with one forward
-    /// and one reverse pass over the topological order (ADR-0003). Stores nothing in the tree; owns preallocated buffers,
-    /// so <see cref="Analyze(ReadOnlySpan{NodeData}, int, int)"/> allocates nothing. Results are valid until the next call.
+    /// [MODEL-derived] bonsai-shape terms of BALANCE §1.2.0 / §1.3.4 / §1.3.5, computed from a node table in O(n) with
+    /// forward and reverse passes over the topological order (ADR-0003). Stores nothing in the tree; owns preallocated buffers,
+    /// so <see cref="Analyze(ReadOnlySpan{NodeData}, in ShapeAnalysisParams)"/> allocates nothing. Results are valid until the next call.
     /// Shared by growth (parent roles, §1.2.7), the preview / PA-103 renderer (foliage pads) and PA-104 hit-testing.
     /// Not thread-safe.
     /// </summary>
     public sealed class TreeShapeAnalysis
     {
         const int NoChildren = int.MaxValue;
+
+        /// <summary><see cref="BackBudDist"/> when no fresh cut lies below the node.</summary>
+        public const int NoFreshCut = int.MaxValue;
 
         readonly int[] _order = new int[TreeGraph.Capacity];
         readonly int[] _tipDistance = new int[TreeGraph.Capacity];
@@ -25,6 +28,9 @@ namespace PocketArbor.Domain.Tree
         readonly bool[] _trunkChain = new bool[TreeGraph.Capacity];
         readonly bool[] _crownAxis = new bool[TreeGraph.Capacity];
         readonly bool[] _primary = new bool[TreeGraph.Capacity];
+        readonly int[] _axisRemain = new int[TreeGraph.Capacity];
+        readonly int[] _backBudDist = new int[TreeGraph.Capacity];
+        readonly bool[] _inPad = new bool[TreeGraph.Capacity];
 
         /// <summary>Number of analysed nodes.</summary>
         public int Count { get; private set; }
@@ -58,11 +64,23 @@ namespace PocketArbor.Domain.Tree
             if (tree == null) throw new ArgumentNullException(nameof(tree));
             if (config == null) throw new ArgumentNullException(nameof(config));
             if (species == null) throw new ArgumentNullException(nameof(species));
-            Analyze(tree.Nodes, config.TrunkChainSegments, species.PadDepth);
+            Analyze(tree.Nodes, Params(tree, config, species));
         }
 
-        public void Analyze(ReadOnlySpan<NodeData> nodes, int trunkChainSegments, int padDepth)
+        /// <summary>Parameters of <paramref name="tree"/> on its current GrowthDayIndex.</summary>
+        public static ShapeAnalysisParams Params(TreeGraph tree, GrowthConfig config, SpeciesConfig species) =>
+            new ShapeAnalysisParams(config.TrunkChainSegments, species.PadDepth, tree.Growth.GrowthDayIndex, config.BackBudDays, config.BackBudRadiusEdges);
+
+        /// <summary>Analysis without back-budding context: <see cref="BackBudDist"/> is <see cref="NoFreshCut"/> everywhere.</summary>
+        public void Analyze(ReadOnlySpan<NodeData> nodes, int trunkChainSegments, int padDepth) =>
+            Analyze(nodes, new ShapeAnalysisParams(trunkChainSegments, padDepth));
+
+        public void Analyze(ReadOnlySpan<NodeData> nodes, in ShapeAnalysisParams p)
         {
+            int trunkChainSegments = p.TrunkChainSegments;
+            int padDepth = p.PadDepth;
+            int growthDayIndex = p.GrowthDayIndex;
+            int backBudDays = p.BackBudDays;
             int count = nodes.Length;
             if (count > TreeGraph.Capacity) throw new ArgumentException("node table exceeds TreeGraph.Capacity", nameof(nodes));
             Count = count;
@@ -74,6 +92,7 @@ namespace PocketArbor.Domain.Tree
                 _childCount[i] = 0;
                 _apicalChild[i] = -1;
                 _tipDistance[i] = NoChildren;
+                _backBudDist[i] = NoFreshCut;
                 _padSizeByRoot[i] = 0;
             }
 
@@ -102,27 +121,37 @@ namespace PocketArbor.Domain.Tree
             }
             TrunkChainLength = chainLength;
 
-            // Reverse pass: TipDistance = 0 without children, else 1 + min over children.
+            // Reverse pass (children precede parents): TipDistance = 0 without children, else 1 + min over children;
+            // §1.3.4 AxisRemain = 0 without an apical child, else 1 + AxisRemain(apical child);
+            // §1.3.5 BackBudDist = 0 at a node with a fresh cut, else 1 + min over children (NoFreshCut if none below).
             for (int i = count - 1; i >= 0; i--)
             {
                 if (_tipDistance[i] == NoChildren) _tipDistance[i] = 0;
+                int apical = _apicalChild[i];
+                _axisRemain[i] = apical < 0 ? 0 : _axisRemain[apical] + 1;
+                int lastCut = nodes[i].LastCutDay;
+                if (lastCut >= 0 && growthDayIndex - lastCut < backBudDays) _backBudDist[i] = 0;
+
                 int parent = nodes[i].ParentIndex;
-                if (parent >= 0 && _tipDistance[i] + 1 < _tipDistance[parent]) _tipDistance[parent] = _tipDistance[i] + 1;
+                if (parent < 0) continue;
+                if (_tipDistance[i] + 1 < _tipDistance[parent]) _tipDistance[parent] = _tipDistance[i] + 1;
+                if (_backBudDist[i] != NoFreshCut && _backBudDist[i] + 1 < _backBudDist[parent]) _backBudDist[parent] = _backBudDist[i] + 1;
             }
 
-            // Leafy (§1.2.5) and pads: forward pass — a pad's smallest index is its topmost node (topological order).
+            // §1.3.4 InPad, IsLeafy and pads: forward pass — a pad's smallest index is its topmost node (topological order).
             int pads = 0;
             for (int i = 0; i < count; i++)
             {
-                bool leafy = nodes[i].HasLeaves
-                    && ((_trunkChain[i] && _childCount[i] == 0) || (EffectiveOrder(i) >= 1 && _tipDistance[i] <= padDepth));
+                int parent = nodes[i].ParentIndex;
+                bool inPad = EffectiveOrder(i) >= 1 && (_axisRemain[i] < padDepth || (parent >= 0 && _inPad[parent]));
+                _inPad[i] = inPad;
+                bool leafy = nodes[i].HasLeaves && (inPad || (_trunkChain[i] && _childCount[i] == 0));
                 _leafy[i] = leafy;
                 if (!leafy)
                 {
                     _padId[i] = -1;
                     continue;
                 }
-                int parent = nodes[i].ParentIndex;
                 if (parent >= 0 && _leafy[parent])
                 {
                     _padId[i] = _padId[parent];
@@ -153,6 +182,7 @@ namespace PocketArbor.Domain.Tree
         /// <summary>Lateral child of a trunk-chain node (a tier).</summary>
         public bool IsPrimary(int index) => _primary[index];
 
+        /// <summary>TipDistance (§1.2.0): 0 without children, else 1 + min over children. Not used for foliage/roles since §1.3.4.</summary>
         public int TipDistance(int index) => _tipDistance[index];
 
         public int ChildCount(int index) => _childCount[index];
@@ -160,11 +190,20 @@ namespace PocketArbor.Domain.Tree
         /// <summary>Index of the apical (BranchSide == 0) child, or −1.</summary>
         public int ApicalChild(int index) => _apicalChild[index];
 
-        /// <summary>Interior node of a branch: ordEff ≥ 1 ∧ TipDistance &gt; PadDepth.</summary>
-        public bool IsInterior(int index) => EffectiveOrder(index) >= 1 && _tipDistance[index] > PadDepth;
+        /// <summary>§1.3.4 AxisRemain: number of apical continuations left on this node's axis (0 at the axis tip).</summary>
+        public int AxisRemain(int index) => _axisRemain[index];
 
-        /// <summary>Pad-role node: ordEff ≥ 1 ∧ TipDistance ≤ PadDepth (terminal nodes included).</summary>
-        public bool IsPadNode(int index) => EffectiveOrder(index) >= 1 && _tipDistance[index] <= PadDepth;
+        /// <summary>§1.3.4 InPad: ordEff ≥ 1 ∧ (AxisRemain &lt; PadDepth ∨ InPad(parent)) — the pad zone of an axis and all it bears.</summary>
+        public bool InPad(int index) => _inPad[index];
+
+        /// <summary>§1.3.5 Edges from this node down to the nearest node with a fresh cut (itself included); <see cref="NoFreshCut"/> if none.</summary>
+        public int BackBudDist(int index) => _backBudDist[index];
+
+        /// <summary>Interior node of a branch (§1.3.4): ordEff ≥ 1 ∧ ¬InPad.</summary>
+        public bool IsInterior(int index) => EffectiveOrder(index) >= 1 && !_inPad[index];
+
+        /// <summary>Pad-role node (§1.3.4): InPad.</summary>
+        public bool IsPadNode(int index) => _inPad[index];
 
         public bool IsLeafy(int index) => _leafy[index];
 

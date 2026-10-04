@@ -44,14 +44,23 @@ namespace PocketArbor.DevTools.GrowthPreview
         /// <summary>A full pad is covered by sprites no wider than this × PuffRadius (wider pads get more columns).</summary>
         public float PadSpriteMaxWidthRatio = 6f;
 
-        /// <summary>Sprite width = pad width / columns × overlap (several columns) or × cover (single sprite).</summary>
-        public float PadClusterOverlap = 1.3f;
-        public float PadSingleCover = 1.12f;
+        /// <summary>Sprite width = pad width / columns × overlap (several columns) or × cover (single sprite).
+        /// PA-102P: pad sprite rects now carry ~8–9 px of transparent margin (≈ 3.4% of the width), so these and
+        /// PadTuftScale / PadLarge|MediumMinRadii are × 1.034 vs PA-103S to keep the visible foliage size.</summary>
+        public float PadClusterOverlap = 1.345f;
+        public float PadSingleCover = 1.16f;
 
         /// <summary>Extra rows for tall pads (apex dome): up to PadMaxRows, each narrower by PadRowShrink and lifted by PadRowLift × width.</summary>
         public int PadMaxRows = 3;
         public float PadRowShrink = 0.78f;
         public float PadRowLift = 0.2f;
+
+        /// <summary>PA-102P (TA): the apex dome's extra rows rise less (one dome-shaped sprite reads as the crown).</summary>
+        public float PadDomeRowLift = 0.12f;
+
+        /// <summary>PA-102P (TA): Nebari roots use the trunk bark (barkAge 1) with a per-root tone in [min, max] (hash), so roots do not merge.</summary>
+        public float RootToneMin = 0.85f;
+        public float RootToneMax = 0.95f;
 
         /// <summary>Rows are added until they cover this share of the puff-union height.</summary>
         public float PadHeightCover = 0.9f;
@@ -63,11 +72,11 @@ namespace PocketArbor.DevTools.GrowthPreview
         public float PadLift = 0.35f;
 
         /// <summary>Small pads: one tuft per node, width = 2·rx·PadTuftScale.</summary>
-        public float PadTuftScale = 1.1f;
+        public float PadTuftScale = 1.14f;
 
         /// <summary>Size class by sprite width: ≥ PadLargeMinRadii·PuffRadius → L, ≥ PadMediumMinRadii·PuffRadius → M, else S.</summary>
-        public float PadLargeMinRadii = 4.5f;
-        public float PadMediumMinRadii = 2.6f;
+        public float PadLargeMinRadii = 4.65f;
+        public float PadMediumMinRadii = 2.69f;
 
         /// <summary>Underside of a pad as a whole is darker by this share (0 if the sprites already bake a dark underside).</summary>
         public float PadUndersideShade = 0f;
@@ -75,10 +84,22 @@ namespace PocketArbor.DevTools.GrowthPreview
         /// <summary>Fraction of the pad height (from the bottom) over which the underside shade fades out.</summary>
         public float PadUndersideHeight = 0.6f;
 
-        /// <summary>Soft shadow underlay: darker translucent duplicate of each puff, offset by (x, −y) × sprite size, scaled.</summary>
-        public Color PadShadowTint = new Color(0.30f, 0.33f, 0.24f, 0.32f);
-        public Vector2 PadShadowOffset = new Vector2(0f, 0.12f);
+        /// <summary>Soft shadow underlay: darker translucent duplicate of each puff, offset by (x, −y) × sprite size, scaled.
+        /// PA-102P: off by default (alpha 0) — the L2 reference has no cast shadow under pads; the old olive-grey
+        /// (0.30, 0.33, 0.24, 0.32) read as a grey drop shadow. If depth is wanted, raise alpha to ≤ 0.10: the tint is
+        /// already a warm umber of the reference trunk shadow, and the offset is small.</summary>
+        public Color PadShadowTint = new Color(0.42f, 0.33f, 0.22f, 0f);
+        public Vector2 PadShadowOffset = new Vector2(0f, 0.05f);
         public float PadShadowScale = 0.98f;
+
+        /// <summary>PA-102P tip coverage: the "solid" part of a pad sprite (α ≥ 0.5) is approximated by an ellipse centred at
+        /// (0.5, PadSolidCenterY) of the quad with radii PadSolidRadiusX/Y × the quad size (the atlas has ~3% transparent margin and
+        /// a lacy rim); an uncovered tip gets an S sprite PadTipSpriteRadii × PuffRadius wide, ≤ PadExtraSpritesMax per pad.</summary>
+        public float PadSolidCenterY = 0.5f;
+        public float PadSolidRadiusX = 0.30f;
+        public float PadSolidRadiusY = 0.22f;
+        public float PadTipSpriteRadii = 2.4f;
+        public int PadExtraSpritesMax = 6;
 
         /// <summary>Fresh growth brightness (BALANCE §1.2.5 FreshTintValue is used; this is the cap of the result).</summary>
         public float FreshBrightnessMax = 1.2f;

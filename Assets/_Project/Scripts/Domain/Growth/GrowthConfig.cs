@@ -68,7 +68,8 @@ namespace PocketArbor.Domain.Growth
 
         // Sapling (PlantSeed)
         public double TrunkInitialLength = 20.0;
-        public double TrunkTargetLength = 48.0;
+        /// <summary>⚑P BALANCE §1.3.1: 48 → 38 (target length of trunk node #0); PA-102P tuning → 36.</summary>
+        public double TrunkTargetLength = 36.0; // PA-102P tuning (range 34–42, Proposed 38): TD-031
         public double TrunkInitialThickness = 4.0;
         public double SaplingLeaderLength = 10.0;
         public double SaplingLeaderThickness = 1.6;
@@ -96,9 +97,39 @@ namespace PocketArbor.Domain.Growth
 
         // §1.2.3 Trunk chain (moyogi S-curve). Amplitude TrunkSwayDeg is per species.
         public int TrunkChainSegments = 5;
-        public double TrunkSwayDecay = 0.85;
+        /// <summary>⚑P BALANCE §1.3.1: 0.85 → 0.88.</summary>
+        public double TrunkSwayDecay = 0.88;
         public double TrunkSwayJitterDeg = 3.0;
         public double TrunkCurvatureJitter = 0.10;
+
+        // ---- Reference shape (BALANCE §1.3, PA-102P) ----------------------------------------------
+
+        // §1.3.1 Trunk chain segment k ≥ 1: TargetLength = TrunkSegmentLength·TrunkSegmentDecay^(k−1)·(1 + TrunkSegmentJitter·(2·u5 − 1)).
+        public double TrunkSegmentLength = 22.5;
+        public double TrunkSegmentDecay = 0.90;
+        public double TrunkSegmentJitter = 0.08;
+
+        /// <summary>§1.3.1 Crown axis (ord 0, Depth ≥ TrunkChainSegments) length factor (replaces OrderLengthFactor; ×ApicalLengthMultiplier stays).</summary>
+        public double CrownAxisLengthFactor = 0.70; // PA-102P tuning (range 0.40–0.70, Proposed 0.50): TD-031
+
+        /// <summary>§1.3.1 S-curve amplitude: A_k = TrunkSwayDeg·(1 + TrunkSwayBendGain·|bendBias|)·TrunkSwayDecay^(k−1).</summary>
+        public double TrunkSwayBendGain = 0.5;
+
+        /// <summary>§1.3.1 Base lean of #0: BaseAngle(#0) = lean + TierPhase·TrunkBaseSwayRatio·A_1.</summary>
+        public double TrunkBaseSwayRatio = 0.35;
+
+        // §1.3.1 Apical delay of the trunk: an ord-0 node of index k = Depth takes an apical child only when AgeDays ≥ Base + Step·k.
+        public int TrunkApicalDelayBaseDays = 4; // PA-102P tuning (range 4–8, Proposed 6): TD-031
+        public int TrunkApicalDelayStepDays = 2; // PA-102P tuning (range 2–4, Proposed 3): TD-031
+
+        /// <summary>§1.3.4 Apical continuation of a branch (ordEff ≥ 1, not the crown axis): × this instead of ApicalLengthMultiplier.</summary>
+        public double BranchApicalLengthMultiplier = 0.45; // PA-102P tuning (range 0.45–0.80, Proposed 0.60): TD-031
+
+        // §1.3.5 Back-budding after a cut: s_i ×= BackBudWeightMultiplier when BackBudDist(i) ≤ BackBudRadiusEdges ∧ ord(i) ≥ 1;
+        // a cut is fresh while GrowthDayIndex − LastCutDay < BackBudDays.
+        public int BackBudDays = 14;
+        public int BackBudRadiusEdges = 2;
+        public double BackBudWeightMultiplier = 8.0; // PA-102P tuning (range 4–10, Proposed 6): TD-031
 
         // §1.2.6 Length by branch order: × OrderLengthFactor^min(ordEff, 2).
         public double OrderLengthFactor = 0.70;
@@ -134,6 +165,8 @@ namespace PocketArbor.Domain.Growth
             if (TrunkChainSegments < 1) throw new ArgumentException("TrunkChainSegments must be >= 1");
             if (!(AttachTMin >= 0.0) || !(AttachTMax <= 1.0) || !(AttachTMin <= AttachTMax)) throw new ArgumentException("AttachT clamp must be within [0, 1]");
             if (!(SegmentTipTaper >= 0.0) || !(SegmentTipTaper <= 1.0)) throw new ArgumentException("SegmentTipTaper must be in [0, 1]");
+            if (TrunkApicalDelayBaseDays < 0 || TrunkApicalDelayStepDays < 0) throw new ArgumentException("Trunk apical delay must be >= 0");
+            if (BackBudDays < 0 || BackBudRadiusEdges < 0 || !(BackBudWeightMultiplier >= 0.0)) throw new ArgumentException("Back-budding parameters must be >= 0");
             if (!(ApicalDominanceWeight >= 0.0) || !(TierWeight >= 0.0) || !(PadWeight >= 0.0) || !(InteriorWeight >= 0.0))
                 throw new ArgumentException("Role weights must be >= 0");
         }

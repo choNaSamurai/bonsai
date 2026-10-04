@@ -45,7 +45,19 @@ namespace PocketArbor.DevTools.GrowthPreview
         public bool IsFallback { get; }
         public int Count => _bySize[0].Count + _bySize[1].Count + _bySize[2].Count;
 
+        readonly List<PadSprite> _dome = new List<PadSprite>();
+
         public void Add(PadSizeClass size, PadSprite sprite) => _bySize[(int)size].Add(sprite);
+
+        /// <summary>PA-102P (TA): the dome-shaped sprite (m0 / k0 / y0 — a crown with branches under it) is reserved for the apex
+        /// dome; side pads never get it (it would read as a second dome).</summary>
+        public void AddDome(PadSprite sprite) => _dome.Add(sprite);
+
+        public bool HasDome => _dome.Count > 0;
+
+        /// <summary>Dome sprite picked by <paramref name="hash01"/>; falls back to <see cref="Pick"/> with L.</summary>
+        public PadSprite PickDome(float hash01) =>
+            _dome.Count > 0 ? _dome[Mathf.Min(_dome.Count - 1, (int)(hash01 * _dome.Count))] : Pick(PadSizeClass.L, hash01);
 
         /// <summary>Sprite of the requested class (or the nearest non-empty one) picked by <paramref name="hash01"/> ∈ [0, 1).</summary>
         public PadSprite Pick(PadSizeClass size, float hash01)
@@ -82,6 +94,7 @@ namespace PocketArbor.DevTools.GrowthPreview
             public float pivotX = 0.5f;
             public float pivotY = 0.3f;
             public string size;
+            public string role;
         }
 
         /// <summary>Parses the TA atlas JSON; <paramref name="width"/>/<paramref name="height"/> = source pixel size of the atlas PNG.</summary>
@@ -95,7 +108,12 @@ namespace PocketArbor.DevTools.GrowthPreview
                 PadJson p = data.pads[i];
                 if (p == null || p.w <= 0f || p.h <= 0f) continue;
                 var uv = new Rect(p.x / width, 1f - (p.y + p.h) / height, p.w / width, p.h / height);
-                atlas.Add(ParseSize(p.size), new PadSprite(uv, new Vector2(Mathf.Clamp01(p.pivotX), Mathf.Clamp01(p.pivotY)), p.h / p.w));
+                var sprite = new PadSprite(uv, new Vector2(Mathf.Clamp01(p.pivotX), Mathf.Clamp01(p.pivotY)), p.h / p.w);
+                // TA naming: the first L sprite "<letter>0" is the dome; an explicit "role":"dome" also works.
+                bool dome = string.Equals(p.role, "dome", StringComparison.OrdinalIgnoreCase)
+                    || (string.IsNullOrEmpty(p.role) && ParseSize(p.size) == PadSizeClass.L && p.name != null && p.name.EndsWith("0", StringComparison.Ordinal));
+                if (dome) atlas.AddDome(sprite);
+                else atlas.Add(ParseSize(p.size), sprite);
             }
             return atlas;
         }

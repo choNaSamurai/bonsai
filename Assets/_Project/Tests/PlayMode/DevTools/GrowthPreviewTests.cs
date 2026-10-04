@@ -108,6 +108,89 @@ namespace PocketArbor.DevTools.Tests
         }
 
         [Test]
+        public void Styled_FixtureDays80To120_NoNodeViolatesS2ToS7()
+        {
+            // PA-102P AC18: after PruneToStyle (BALANCE §1.3.7) nothing is left that S2–S7 would cut.
+            foreach (SpeciesId species in new[] { SpeciesId.Kuromatsu, SpeciesId.Momiji, SpeciesId.Yamazakura })
+            {
+                var model = new GrowthPreviewModel();
+                model.SetParameters(species, 20261004u, 1.0, 0.0, 25.0, 0.5, true);
+                model.SetStyled(true);
+                var styler = new MoyogiStyler();
+                var ids = new System.Collections.Generic.List<int>();
+                foreach (int day in new[] { 80, 90, 100, 110, 120 })
+                {
+                    TreeGraph tree = model.GetTree(day);
+                    for (var rule = MoyogiStyler.Rule.S2CrownHeight; rule <= MoyogiStyler.Rule.S7Dome; rule++)
+                    {
+                        styler.Collect(tree, model.Config, model.SpeciesConfig, model.Style, rule, ids);
+                        Assert.AreEqual(0, ids.Count, species + " D" + day + " " + rule + " still has " + ids.Count + " node(s)");
+                    }
+                }
+            }
+        }
+
+        [Test]
+        public void Styled_StyleDays_TwentyToOneTwentyEveryTen()
+        {
+            var style = new StyleConfig();
+            for (int day = 0; day <= 130; day++) Assert.AreEqual(day >= 20 && day <= 120 && day % 10 == 0, style.IsStyleDay(day), "day " + day);
+        }
+
+        [Test]
+        public void MeshBuilder_FixedPotAndNebari_Day80()
+        {
+            // PA-102P: pot = 92 units regardless of the crown (BALANCE §1.3.0); Nebari §1.3.3: 7 roots at th0 ≥ 13.9, ≥ 2 per side,
+            // visible end ≥ 0.45 of the base thickness.
+            var builder = new TreePreviewMeshBuilder();
+            var mesh = new Mesh();
+            var samples = new System.Collections.Generic.List<Vector3>();
+            try
+            {
+                var model = new GrowthPreviewModel();
+                model.SetParameters(SpeciesId.Momiji, 20261004u, 1.0, 0.0, 25.0, 0.5, true);
+                model.SetStyled(true);
+                foreach (int day in new[] { 0, 80 })
+                {
+                    builder.Build(model.GetTree(day), mesh, model.Config, model.SpeciesConfig);
+                    Assert.AreEqual(92f, builder.LastPotWidth);
+                }
+                Assert.AreEqual(7, builder.LastRootCount);
+                int left = 0, right = 0;
+                for (int r = 0; r < builder.LastRootCount; r++)
+                {
+                    builder.NebariRoot(20261004u, r, builder.LastRootCount, samples);
+                    if (samples[samples.Count - 1].x < 0f) left++;
+                    else right++;
+                    Assert.GreaterOrEqual(samples[samples.Count - 1].z / samples[0].z, 0.45f - 1e-4f, "root " + r + " end thickness");
+                    Assert.Less(samples[samples.Count - 1].y, 0f, "root " + r + " ends under the soil line");
+                }
+                Assert.GreaterOrEqual(left, 2);
+                Assert.GreaterOrEqual(right, 2);
+            }
+            finally
+            {
+                Object.DestroyImmediate(mesh);
+            }
+        }
+
+        [Test]
+        public void PotFraming_SaplingToFullTree_PotAlwaysInsideFrame()
+        {
+            // TD-030 prototype: ZoomMin 0.78 (owner) — the whole pot (top − 0.161·H_ref of the L2 frame) stays above the frame bottom.
+            foreach (float treeHeight in new[] { 0f, 20f, 60f, 130f, 200f })
+            {
+                float z = PotFraming.Zoom(92f, 0f, new Rect(-30f, 0f, 60f, treeHeight));
+                Rect frame = PotFraming.FrameAt(z, 92f, 0f);
+                Assert.That(z, Is.InRange(PotFraming.ZoomMin, PotFraming.ZoomMax));
+                float potBottom = -(1290f - 1068f) / 1376f * (PotFraming.FrameAt(1f, 92f, 0f).height);
+                Assert.GreaterOrEqual(potBottom, frame.yMin, "pot bottom inside at z " + z);
+                Assert.GreaterOrEqual(frame.width * PotFraming.PotShareOfWidth / z, 91.9f);
+            }
+            Assert.AreEqual(PotFraming.ZoomMin, PotFraming.Zoom(92f, 0f, new Rect(-10f, 0f, 20f, 20f)), 1e-4f, "a sapling gets the closest frame");
+        }
+
+        [Test]
         public void MeshBuilder_Day40And80_NebariBaseToTwoThirdsWidthAtLeast4()
         {
             var builder = new TreePreviewMeshBuilder();

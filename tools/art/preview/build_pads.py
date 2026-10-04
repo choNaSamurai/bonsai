@@ -60,18 +60,73 @@ def to_yamazakura(im):
 def size_class(w):
     return 'L' if w >= 540 else ('M' if w >= 440 else 'S')
 
-def pack(sprites, AW, AH, pad=10):
-    order = sorted(range(len(sprites)), key=lambda i: -sprites[i].size[1])
-    pos = [None] * len(sprites); x = pad; y = pad; rowh = 0
+PAD_PX = 12   # PA-102P: transparent margin around every sprite rect (mips/bilinear never reach the rect edge)
+
+def defringe(im, ink=0.86):
+    """PA-102P: semi-transparent edge texels take the colour of the nearest opaque interior, darkened toward ink.
+    Kills the light/grey fringe left by keying + Lanczos/unsharp (most visible on the top of m0)."""
+    rgb = im.convert('RGB'); a = im.getchannel('A')
+    known = a.point(lambda v: 255 if v >= 250 else 0).filter(ImageFilter.MinFilter(3))
+    fill = push_pull(rgb, known); fp = fill.load(); op = rgb.load(); ap = a.load()
+    W, H = rgb.size
+    for y in range(H):
+        for x in range(W):
+            al = ap[x, y]
+            if 0 < al < 250:
+                fr, fg, fb = fp[x, y]; r, g, b = op[x, y]
+                # keep the darker of (original, darkened interior) per channel -> only removes light fringe
+                op[x, y] = (min(r, int(fr * ink)), min(g, int(fg * ink)), min(b, int(fb * ink)))
+    rgb.putalpha(a); return rgb
+
+def pad_sprite(im, pad=PAD_PX):
+    """Grow the PA-103S rect uniformly so the content has >= `pad` px of transparent margin on every side.
+    The old rect stays centred inside the new one -> its pivot (0.5 / 0.2) keeps the same texel.
+    Returns (sprite, extra, old_w, old_h)."""
+    W, H = im.size
+    l, t, r, b = im.getchannel('A').getbbox()
+    extra = max(0, pad - min(l, t, W - r, H - b))
+    out = Image.new('RGBA', (W + 2 * extra, H + 2 * extra), (0, 0, 0, 0)); out.paste(im, (extra, extra))
+    return out, extra, W, H
+
+def pack(sprites, AW, AH, gap=2):
+    """Skyline bottom-left packer (tallest first). Rects already carry PAD_PX margin, `gap` only separates rects."""
+    order = sorted(range(len(sprites)), key=lambda i: (-sprites[i].size[1], -sprites[i].size[0]))
+    sky = [(0, AW, 0)]  # segments (x, width, y)
+    pos = [None] * len(sprites)
     for i in order:
-        w, h = sprites[i].size
-        if x + w + pad > AW:
-            x = pad; y += rowh + pad; rowh = 0
-        pos[i] = (x, y); x += w + pad; rowh = max(rowh, h)
-    assert y + rowh + pad <= AH, ('overflow', y + rowh)
+        w, h = sprites[i].size; w += gap; h += gap
+        best = None
+        for si in range(len(sky)):
+            x = sky[si][0]
+            if x + w > AW: break
+            # max y over segments covered by [x, x+w)
+            y = 0; wl = w; sj = si
+            while wl > 0:
+                y = max(y, sky[sj][2]); wl -= sky[sj][1]; sj += 1
+                if sj >= len(sky) and wl > 0: y = None; break
+            if y is None or y + h > AH: continue
+            if best is None or (y, x) < (best[1], best[0]): best = (x, y)
+        assert best, ('atlas overflow', i, sprites[i].size)
+        x, y = best; pos[i] = (x, y)
+        # update skyline
+        new = []
+        for (sx, sw, sy) in sky:
+            ex = sx + sw
+            if ex <= x or sx >= x + w: new.append((sx, sw, sy)); continue
+            if sx < x: new.append((sx, x - sx, sy))
+            if ex > x + w: new.append((x + w, ex - (x + w), sy))
+        new.append((x, w, y + h)); new.sort()
+        merged = []
+        for s in new:
+            if merged and merged[-1][2] == s[2] and merged[-1][0] + merged[-1][1] == s[0]:
+                merged[-1] = (merged[-1][0], merged[-1][1] + s[1], s[2])
+            else: merged.append(s)
+        sky = merged
     return pos
 
 def build(name, prefix, sprites, AW=2048, AH=1024):
+    padded = [pad_sprite(defringe(s)) for s in sprites]
+    sprites = [p[0] for p in padded]
     pos = pack(sprites, AW, AH)
     atlas = Image.new('RGBA', (AW, AH), (0, 0, 0, 0))
     for s, (x, y) in zip(sprites, pos):
@@ -85,10 +140,11 @@ def build(name, prefix, sprites, AW=2048, AH=1024):
     rgb.putalpha(a)
     rgb.save(OUT + name + '.png', optimize=True)
     meta = {"pads": []}
-    for i, (s, (x, y)) in enumerate(zip(sprites, pos)):
-        w, h = s.size
+    for i, (s, (x, y), (_, m, lw, lh)) in enumerate(zip(sprites, pos, padded)):
+        w, h = s.size   # PA-103S rect lw×lh sits at (m, m) inside; pivot 0.5 / 0.2 of it, from the bottom-left
         meta["pads"].append({"name": "%s%d" % (prefix, i), "x": x, "y": y, "w": w, "h": h,
-                             "pivotX": 0.5, "pivotY": 0.2, "size": size_class(w)})
+                             "pivotX": round((m + 0.5 * lw) / w, 5), "pivotY": round((m + 0.2 * lh) / h, 5),
+                             "size": size_class(lw), "padPx": m, "innerW": lw, "innerH": lh})
     with open(OUT + name + '.json', 'w') as f:
         json.dump(meta, f, indent=2)
     return rgb, meta
@@ -106,4 +162,4 @@ if __name__ == '__main__':
     yamU = [upscale_rgba(to_yamazakura(s)) for s in mom]
     for nm, pf, sp in (('pads_momiji', 'm', momU), ('pads_kuromatsu', 'k', kurU), ('pads_yamazakura', 'y', yamU)):
         _, meta = build(nm, pf, sp)
-        print(nm, [(p['name'], p['w'], p['h'], p['size']) for p in meta['pads']])
+        print(nm, [(p['name'], p['x'], p['y'], p['w'], p['h'], p['pivotY'], p['size']) for p in meta['pads']])

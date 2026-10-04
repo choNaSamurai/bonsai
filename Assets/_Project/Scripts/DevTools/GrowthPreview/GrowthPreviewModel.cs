@@ -16,15 +16,6 @@ namespace PocketArbor.DevTools.GrowthPreview
         public const int MaxPreviewDay = 120;
         public const int Reach200SearchDays = 400;
 
-        /// <summary>PA-102S AC19: styling sessions of the Styled mode.</summary>
-        public static readonly int[] StyleDays = { 20, 30, 40, 50, 60, 70 };
-
-        /// <summary>PruneToStyle: branch nodes farther than this many segments from the trunk are cut.</summary>
-        public const int StyleMaxBranchSegments = 3;
-
-        /// <summary>PruneToStyle: of two tiers attached closer than this (units of height), the lower one is cut.</summary>
-        public const double StyleMinTierGap = 12.0;
-
         readonly GrowthConfig _config = GrowthConfig.CreateDefault();
         readonly SoilConfig _soil = SoilConfig.CreateDefault();
         readonly SpeciesCatalog _species = SpeciesCatalog.CreateDefault();
@@ -32,6 +23,8 @@ namespace PocketArbor.DevTools.GrowthPreview
         readonly List<TreeSnapshot> _days = new List<TreeSnapshot>();
         readonly List<KeyValuePair<int, int>> _cuts = new List<KeyValuePair<int, int>>(); // (day, nodeId)
         readonly System.Random _cutPicker = new System.Random(1);
+        readonly StyleConfig _style = StyleConfig.CreateDefault();
+        readonly MoyogiStyler _styler = new MoyogiStyler();
 
         SpeciesId _speciesId = SpeciesId.Kuromatsu;
         uint _seed = 20261004u;
@@ -59,7 +52,10 @@ namespace PocketArbor.DevTools.GrowthPreview
         public int CutCount => _cuts.Count;
         public bool Styled => _styled;
 
-        /// <summary>Wild (no pruning) or Styled (<see cref="PruneToStyle"/> on <see cref="StyleDays"/>).</summary>
+        /// <summary>PA-102P: moyogi styling parameters (BALANCE §1.3.7); change them before the first <see cref="GetDay"/>.</summary>
+        public StyleConfig Style => _style;
+
+        /// <summary>Wild (no pruning) or Styled (<see cref="PruneToStyle"/> S1–S7 on <see cref="StyleConfig.IsStyleDay"/> — D20, 30, …, 120).</summary>
         public void SetStyled(bool styled)
         {
             if (styled == _styled) return;
@@ -138,74 +134,9 @@ namespace PocketArbor.DevTools.GrowthPreview
             return result;
         }
 
-        /// <summary>
-        /// Simple moyogi styling script (PA-102S AC19), in order: (1) the sapling's wild twig (trunk lateral below the tier
-        /// slots); (2) every branch node farther than <see cref="StyleMaxBranchSegments"/> segments from the trunk chain
-        /// (crown axis included); (3) of two primaries attached closer than <see cref="StyleMinTierGap"/> in height, the
-        /// lower one; (4) interior shoots — laterals of interior branch nodes. Returns the number of cuts.
-        /// </summary>
-        public static int PruneToStyle(TreeGraph tree, GrowthConfig config, SpeciesConfig species)
-        {
-            var shape = new TreeShapeAnalysis();
-            var targets = new List<int>();
-            int cuts = 0;
-
-            // (1) Wild twig.
-            for (int i = 1; i < tree.Count; i++)
-            {
-                NodeData n = tree.Nodes[i];
-                if (n.ParentIndex == 0 && n.BranchSide != 0 && n.AttachT < config.TrunkBaseSlotT0 - config.AttachTJitter - 1e-9) targets.Add(n.Id);
-            }
-            cuts += PruneAll(tree, targets, config);
-
-            // (2) Branch "legs": nodes more than N segments from their trunk-chain ancestor.
-            shape.Analyze(tree, config, species);
-            for (int i = 1; i < tree.Count; i++)
-            {
-                if (shape.IsTrunkChain(i)) continue;
-                int anchor = tree.Nodes[i].ParentIndex;
-                while (anchor > 0 && !shape.IsTrunkChain(anchor)) anchor = tree.Nodes[anchor].ParentIndex;
-                if (tree.Nodes[i].Depth - tree.Nodes[anchor].Depth == StyleMaxBranchSegments + 1) targets.Add(tree.Nodes[i].Id);
-            }
-            cuts += PruneAll(tree, targets, config);
-
-            // (3) Tiers too close in height: cut the lower of the pair.
-            shape.Analyze(tree, config, species);
-            var baseY = AttachHeights(tree);
-            var primaries = new List<int>();
-            for (int i = 1; i < tree.Count; i++)
-            {
-                if (shape.IsPrimary(i)) primaries.Add(i);
-            }
-            primaries.Sort((a, b) => baseY[a].CompareTo(baseY[b]));
-            for (int j = 1; j < primaries.Count; j++)
-            {
-                if (baseY[primaries[j]] - baseY[primaries[j - 1]] < StyleMinTierGap) targets.Add(tree.Nodes[primaries[j - 1]].Id);
-            }
-            cuts += PruneAll(tree, targets, config);
-
-            // (4) Interior shoots.
-            shape.Analyze(tree, config, species);
-            for (int i = 1; i < tree.Count; i++)
-            {
-                int parent = tree.Nodes[i].ParentIndex;
-                if (tree.Nodes[i].BranchSide != 0 && !shape.IsTrunkChain(parent) && shape.IsInterior(parent)) targets.Add(tree.Nodes[i].Id);
-            }
-            cuts += PruneAll(tree, targets, config);
-            return cuts;
-        }
-
-        static int PruneAll(TreeGraph tree, List<int> ids, GrowthConfig config)
-        {
-            int cuts = 0;
-            for (int k = 0; k < ids.Count; k++)
-            {
-                if (tree.IndexOf(ids[k]) < 0) continue; // already removed with an ancestor
-                if (TreePruning.Prune(tree, ids[k], config).Succeeded) cuts++;
-            }
-            ids.Clear();
-            return cuts;
-        }
+        /// <summary>PA-102P: moyogi styling S1–S7 (BALANCE §1.3.7) with the default <see cref="StyleConfig"/>. Returns the number of cuts.</summary>
+        public static int PruneToStyle(TreeGraph tree, GrowthConfig config, SpeciesConfig species) =>
+            new MoyogiStyler().PruneToStyle(tree, config, species, StyleConfig.CreateDefault());
 
         /// <summary>Height of every node's base (chord geometry, AttachT along the parent chord).</summary>
         public static double[] AttachHeights(TreeGraph tree)
@@ -240,7 +171,7 @@ namespace PocketArbor.DevTools.GrowthPreview
                 tree = TreeGraph.FromSnapshot(_days[day - 1]);
                 RunOneDay(tree);
             }
-            if (_styled && Array.IndexOf(StyleDays, day) >= 0) PruneToStyle(tree, _config, SpeciesConfig);
+            if (_styled && _style.IsStyleDay(day)) _styler.PruneToStyle(tree, _config, SpeciesConfig, _style);
             ApplyCuts(tree, day, _cuts.Count);
             return tree.ToSnapshot();
         }

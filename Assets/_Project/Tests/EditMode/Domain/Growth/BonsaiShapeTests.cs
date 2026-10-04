@@ -8,7 +8,8 @@ using PocketArbor.Domain.Tree;
 namespace PocketArbor.Domain.Tests.Growth
 {
     /// <summary>
-    /// PA-102S bonsai shape, model acceptance criteria AC1–AC8, AC10–AC14 (BALANCE §1.2). «30 seeds» = seeds 1…30,
+    /// PA-102S bonsai shape, model acceptance criteria AC1–AC8, AC10–AC14 (BALANCE §1.2), updated to PA-102P (§1.3: AC9, AC13–AC15).
+    /// «30 seeds» = seeds 1…30,
     /// G = 1, vigor 1, bendBias 0, no pruning, from the post-onboarding state; «fixture» = seed 20261004.
     /// </summary>
     public sealed class BonsaiShapeTests
@@ -59,7 +60,7 @@ namespace PocketArbor.Domain.Tests.Growth
         // ---- AC2 / AC3: tiers --------------------------------------------------------------------------
 
         [Test]
-        public void Tiers_Day40And80_PrimarySidesFollowSlotsAndAlternateByHeight()
+        public void Tiers_Day40And80_SidesFollowBendSlotsAndBendTiersAlternate()
         {
             var config = Config();
             var sim = ShapeMetrics.Simulator(config);
@@ -80,25 +81,23 @@ namespace PocketArbor.Domain.Tests.Growth
             var nodes = tree.Nodes;
             var shape = ShapeMetrics.Analyze(tree, config);
             ShapeMetrics.Heights(tree, out double[] baseY, out _);
-            int tier = TreeShapeAnalysis.TierPhase(tree.Genome.Seed);
-            var primaries = new List<int>();
+            var bendTiers = new List<int>();
             for (int i = 1; i < nodes.Length; i++)
             {
                 if (!shape.IsPrimary(i)) continue;
                 int p = nodes[i].ParentIndex;
-                double boundary = p == 0 ? 0.825 : 0.65;
-                bool slot0 = nodes[i].AttachT < boundary;
-                Assert.AreEqual(tier * (slot0 ? -1 : 1), nodes[i].BranchSide, label + " node " + i);
-                primaries.Add(i);
+                int k = nodes[p].Depth;
+                bool slot0 = nodes[i].AttachT < (p == 0 ? 0.825 : 0.65);
+                // ⚑P BALANCE §1.3.2: slot 1 on s_k = TierPhase·(−1)^k, slot 0 on −s_k.
+                int sk = ShootBuilder.TierSide(k, tree.Genome.Seed);
+                Assert.AreEqual(slot0 ? -sk : sk, nodes[i].BranchSide, label + " node " + i);
+                if (!slot0 || k == 0) bendTiers.Add(i);
             }
-            primaries.Sort((a, b) => baseY[a].CompareTo(baseY[b]));
-            for (int j = 1; j < primaries.Count; j++)
+            // Bend tiers (slot 1 of every chain node) + the bottom tier (#0 slot 0) alternate strictly by height.
+            bendTiers.Sort((a, b) => baseY[a].CompareTo(baseY[b]));
+            for (int j = 1; j < bendTiers.Count; j++)
             {
-                int a = primaries[j - 1], b = primaries[j];
-                int slotA = 2 * nodes[nodes[a].ParentIndex].Depth + (nodes[a].AttachT < (nodes[a].ParentIndex == 0 ? 0.825 : 0.65) ? 0 : 1);
-                int slotB = 2 * nodes[nodes[b].ParentIndex].Depth + (nodes[b].AttachT < (nodes[b].ParentIndex == 0 ? 0.825 : 0.65) ? 0 : 1);
-                Assert.Less(slotA, slotB, label + ": height order follows slot order");
-                if (slotB - slotA == 1) Assert.AreNotEqual(nodes[a].BranchSide, nodes[b].BranchSide, label + ": adjacent tiers alternate");
+                Assert.AreNotEqual(nodes[bendTiers[j - 1]].BranchSide, nodes[bendTiers[j]].BranchSide, label + ": bend tiers alternate");
             }
         }
 
@@ -261,23 +260,59 @@ namespace PocketArbor.Domain.Tests.Growth
         // ---- AC8: lengths ------------------------------------------------------------------------------
 
         [Test]
-        public void TargetLength_WithoutJitter_EqualsSection11TimesOrderFactor()
+        public void TargetLength_WithoutJitter_MatchesSection13FormulasByRole()
         {
+            // PA-102P AC9: chain k ≥ 1 = TrunkSegmentLength·Decay^(k−1); crown axis ×1.2×CrownAxisLengthFactor;
+            // branch continuations ×BranchApicalLengthMultiplier×0.7^min(ordEff,2); laterals ×0.7^min(ordEff,2). Exact (1e-12).
             var config = Config();
             config.ShootLengthJitter = 0.0;
+            config.TrunkSegmentJitter = 0.0;
             var sim = ShapeMetrics.Simulator(config);
             foreach (SpeciesId species in AllSpecies)
             {
-                var tree = ShapeMetrics.Grow(sim, GrowthTestKit.FixtureSeed, species, 80);
+                var tree = ShapeMetrics.Grow(sim, GrowthTestKit.FixtureSeed, species, 120);
                 var shape = ShapeMetrics.Analyze(tree, config);
+                int crown = 0, continuations = 0;
                 for (int i = 1; i < tree.Count; i++)
                 {
                     NodeData n = tree.Nodes[i];
-                    double expected = config.ShootBaseLength * Math.Pow(config.ShootLengthDecay, n.Depth - 1)
-                        * (n.BranchSide == 0 ? config.ApicalLengthMultiplier : 1.0)
-                        * Math.Pow(config.OrderLengthFactor, Math.Min(shape.EffectiveOrder(i), 2));
-                    Assert.AreEqual(expected, n.TargetLength, 1e-9, species + " node " + i);
-                    if (shape.IsTrunkChain(i)) Assert.AreEqual(0, shape.EffectiveOrder(i), "trunk chain has no order factor");
+                    double baseLength = config.ShootBaseLength * Math.Pow(config.ShootLengthDecay, n.Depth - 1);
+                    double orderFactor = Math.Pow(config.OrderLengthFactor, Math.Min(shape.EffectiveOrder(i), 2));
+                    double expected;
+                    if (shape.IsTrunkChain(i)) expected = config.TrunkSegmentLength * Math.Pow(config.TrunkSegmentDecay, n.Depth - 1);
+                    else if (shape.IsCrownAxis(i))
+                    {
+                        expected = baseLength * config.ApicalLengthMultiplier * config.CrownAxisLengthFactor;
+                        crown++;
+                    }
+                    else if (n.BranchSide == 0)
+                    {
+                        expected = baseLength * config.BranchApicalLengthMultiplier * orderFactor;
+                        continuations++;
+                    }
+                    else expected = baseLength * orderFactor;
+                    Assert.AreEqual(expected, n.TargetLength, 1e-12, species + " node " + i);
+                }
+                Assert.AreEqual(config.TrunkTargetLength, tree.Nodes[0].TargetLength);
+                Assert.Greater(crown, 0, species + ": crown axis exists by D120");
+                Assert.Greater(continuations, 10, species.ToString());
+            }
+        }
+
+        [Test]
+        public void TargetLength_TrunkSegmentJitter_UsesU5WithinEightPercent()
+        {
+            var config = Config();
+            var sim = ShapeMetrics.Simulator(config);
+            for (uint seed = 1; seed <= Seeds; seed++)
+            {
+                var tree = ShapeMetrics.Grow(sim, seed, SpeciesId.Momiji, 60);
+                var shape = ShapeMetrics.Analyze(tree, config);
+                for (int i = 1; i < tree.Count; i++)
+                {
+                    if (!shape.IsTrunkChain(i)) continue;
+                    double center = config.TrunkSegmentLength * Math.Pow(config.TrunkSegmentDecay, tree.Nodes[i].Depth - 1);
+                    Assert.That(tree.Nodes[i].TargetLength, Is.InRange(center * 0.92 - 1e-9, center * 1.08 + 1e-9), "seed " + seed + " k=" + tree.Nodes[i].Depth);
                 }
             }
         }
@@ -288,17 +323,21 @@ namespace PocketArbor.Domain.Tests.Growth
         public void Pads_FixtureDay40_AtLeastFivePadsMostlyOnBranches()
         {
             var config = Config();
-            var tree = ShapeMetrics.Grow(ShapeMetrics.Simulator(config), GrowthTestKit.FixtureSeed, SpeciesId.Kuromatsu, 40);
-            var shape = ShapeMetrics.Analyze(tree, config);
-            double fraction = ShapeMetrics.LeafyInBranchPadsFraction(shape);
-            TestContext.Out.WriteLine("fixture D40: pads = " + shape.PadCount + ", leafy in ordEff ≥ 1 pads = " + fraction.ToString("0.00"));
-            Assert.GreaterOrEqual(shape.PadCount, 5);
-            Assert.GreaterOrEqual(fraction, 0.70);
+            foreach (SpeciesId species in AllSpecies)
+            {
+                var tree = ShapeMetrics.Grow(ShapeMetrics.Simulator(config), GrowthTestKit.FixtureSeed, species, 40);
+                var shape = ShapeMetrics.Analyze(tree, config);
+                double fraction = ShapeMetrics.LeafyInBranchPadsFraction(shape);
+                TestContext.Out.WriteLine(species + " fixture D40: pads = " + shape.PadCount + ", leafy in ordEff ≥ 1 pads = " + fraction.ToString("0.00"));
+                Assert.GreaterOrEqual(shape.PadCount, 5, species.ToString());
+                Assert.GreaterOrEqual(fraction, 0.70, species.ToString());
+            }
         }
 
+        // PA-102P AC13 (was PA-102S AC10): with InPad (BALANCE §1.3.4) the primary's own base is bare in every species.
         [TestCase(SpeciesId.Kuromatsu)]
-        [TestCase(SpeciesId.Momiji, Ignore = "PA-102S open GD question: PadDepth 2 gives median 0.10 (PadDepth 1 → 0.60), see PA-102S journal")]
-        [TestCase(SpeciesId.Yamazakura, Ignore = "PA-102S open GD question: PadDepth 2 gives median 0.10, see PA-102S journal")]
+        [TestCase(SpeciesId.Momiji)]
+        [TestCase(SpeciesId.Yamazakura)]
         public void Pads_Day80_MostPrimariesHaveBareBase(SpeciesId species)
         {
             var config = Config();
@@ -318,8 +357,9 @@ namespace PocketArbor.Domain.Tests.Growth
         // ---- AC11: back-budding ------------------------------------------------------------------------
 
         [Test]
-        public void PruneTip_TerminalNode_ParentBecomesLeafyTip()
+        public void PruneTip_TerminalApicalNode_ParentBecomesLeafyAxisTipAndRecordsCutDay()
         {
+            // PA-102P AC15: Prune writes LastCutDay = GrowthDayIndex on the parent; the parent becomes the axis tip (AxisRemain 0, InPad).
             var config = Config();
             var sim = ShapeMetrics.Simulator(config);
             int checkedCuts = 0;
@@ -330,13 +370,17 @@ namespace PocketArbor.Domain.Tests.Growth
                 for (int i = tree.Count - 1; i > 0; i--)
                 {
                     int p = tree.Nodes[i].ParentIndex;
-                    if (shape.ChildCount(i) != 0 || shape.ChildCount(p) != 1 || shape.EffectiveOrder(p) < 1) continue;
+                    if (shape.ChildCount(i) != 0 || tree.Nodes[i].BranchSide != 0 || shape.Order(p) < 1) continue;
                     int parentId = tree.Nodes[p].Id;
                     bool parentHasLeaves = tree.Nodes[p].HasLeaves;
+                    Assert.AreEqual(NodeData.NoCut, tree.Nodes[p].LastCutDay);
                     TreePruning.Prune(tree, tree.Nodes[i].Id, config);
                     shape = ShapeMetrics.Analyze(tree, config);
                     int now = tree.IndexOf(parentId);
-                    Assert.AreEqual(0, shape.TipDistance(now));
+                    Assert.AreEqual(tree.Growth.GrowthDayIndex, tree.Nodes[now].LastCutDay, "LastCutDay = GrowthDayIndex");
+                    Assert.AreEqual(0, shape.AxisRemain(now));
+                    Assert.IsTrue(shape.InPad(now));
+                    Assert.AreEqual(0, shape.BackBudDist(now), "fresh cut");
                     Assert.AreEqual(parentHasLeaves, shape.IsLeafy(now));
                     checkedCuts++;
                     break;
@@ -345,41 +389,53 @@ namespace PocketArbor.Domain.Tests.Growth
             Assert.Greater(checkedCuts, 20);
         }
 
-        [Test, Ignore("PA-102S open GD question: role weights alone give 13/87 ≈ 15% (needs ≥ 50%); a back-budding rule is not in BALANCE §1.2.7")]
-        public void PruneTip_Day40_NextShootsOfBranchMostlyNearCut()
+        // PA-102P AC15 (was PA-102S AC11): back-budding — BALANCE §1.3.5 (×BackBudWeightMultiplier within 2 edges for 14 days).
+        [TestCase(SpeciesId.Kuromatsu)]
+        [TestCase(SpeciesId.Momiji)]
+        [TestCase(SpeciesId.Yamazakura)]
+        public void PruneTip_Day40_NextShootsOfBranchMostlyNearCut(SpeciesId species)
         {
             var config = Config();
             var sim = ShapeMetrics.Simulator(config);
+            var fractions = new List<double>();
             int near = 0, counted = 0;
             for (uint seed = 1; seed <= Seeds; seed++)
             {
-                var tree = ShapeMetrics.Grow(sim, seed, SpeciesId.Kuromatsu, 40);
+                var tree = ShapeMetrics.Grow(sim, seed, species, 40);
                 int n = ShapeMetrics.BackBuddingNearCut(sim, tree, out int c, out _);
-                if (n < 0) continue;
+                if (n < 0 || c == 0) continue;
                 near += n;
                 counted += c;
+                fractions.Add(n / (double)c);
             }
-            TestContext.Out.WriteLine("back-budding: " + near + " / " + counted + " shoots ≤ 2 edges from the cut");
-            Assert.GreaterOrEqual(near, counted * 0.5);
+            double median = ShapeMetrics.Median(fractions.ToArray(), fractions.Count);
+            TestContext.Out.WriteLine(species + " back-budding: " + near + " / " + counted + " shoots ≤ 2 edges from the cut, median per seed " + median.ToString("0.00"));
+            Assert.GreaterOrEqual(fractions.Count, 25);
+            Assert.GreaterOrEqual(median, 0.5);
         }
 
         // ---- AC12: interior shoots ---------------------------------------------------------------------
 
+        // PA-102P AC14 (was PA-102S AC12): ≥ 1 interior shoot (lateral of a ¬InPad node) — D40 in ≥ 50% of seeds, D60 in ≥ 70%.
         [TestCase(SpeciesId.Kuromatsu)]
-        [TestCase(SpeciesId.Momiji, Ignore = "PA-102S open GD question: PadDepth 2 → 2/30 seeds by D40, see PA-102S journal")]
-        [TestCase(SpeciesId.Yamazakura, Ignore = "PA-102S open GD question: PadDepth 2 → 2/30 seeds by D40, see PA-102S journal")]
-        public void InteriorShoots_Day40_MostSeedsHaveOne(SpeciesId species)
+        [TestCase(SpeciesId.Momiji)]
+        [TestCase(SpeciesId.Yamazakura)]
+        public void InteriorShoots_Day40And60_MostSeedsHaveOne(SpeciesId species)
         {
             var config = Config();
             var sim = ShapeMetrics.Simulator(config);
-            int seedsWithInterior = 0;
+            int by40 = 0, by60 = 0;
             for (uint seed = 1; seed <= Seeds; seed++)
             {
                 var tree = ShapeMetrics.Grow(sim, seed, species, 0);
-                if (ShapeMetrics.InteriorLateralShoots(sim, tree, 40) > 0) seedsWithInterior++;
+                int first = ShapeMetrics.InteriorLateralShoots(sim, tree, 40);
+                int second = ShapeMetrics.InteriorLateralShoots(sim, tree, 20);
+                if (first > 0) by40++;
+                if (first + second > 0) by60++;
             }
-            TestContext.Out.WriteLine(species + ": " + seedsWithInterior + " / " + Seeds + " seeds with an interior shoot by D40");
-            Assert.GreaterOrEqual(seedsWithInterior, (int)Math.Ceiling(0.70 * Seeds));
+            TestContext.Out.WriteLine(species + ": interior shoot by D40 in " + by40 + " / " + Seeds + ", by D60 in " + by60 + " / " + Seeds);
+            Assert.GreaterOrEqual(by40, (int)Math.Ceiling(0.50 * Seeds));
+            Assert.GreaterOrEqual(by60, (int)Math.Ceiling(0.70 * Seeds));
         }
 
         // ---- AC13: planting ----------------------------------------------------------------------------

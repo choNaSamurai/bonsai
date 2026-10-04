@@ -73,7 +73,9 @@ namespace PocketArbor.DevTools.Tests
             {
                 NodeData node = tree.Nodes[i];
                 builder.ArcRange(i, out float start, out float end);
-                Assert.Greater(end, start, "arc grows along node " + i);
+                // PA-102P: a terminal InPad twig (ord ≥ 2) shorter than PadTwigInset shows no bark (BALANCE §1.3.4) → zero arc.
+                if (builder.BarkEndT(i) > 0f) Assert.Greater(end, start, "arc grows along node " + i);
+                else Assert.AreEqual(start, end, 1e-4f, "trimmed twig has no bark at node " + i);
                 if (node.BranchSide != 0) continue;
                 builder.ArcRange(node.ParentIndex, out _, out float parentEnd);
                 Assert.AreEqual(parentEnd, start, 1e-4f, "axis continues the parent's arc at node " + i);

@@ -30,7 +30,9 @@ namespace PocketArbor.Domain.Tree
             // #0 trunk. BALANCE §1.2.8: Curvature = tri(0, TrunkCurvatureJitter), exactly 2 draws, before the shoots.
             double ua = ShootDraws.Uniform(rng);
             double ub = ShootDraws.Uniform(rng);
-            double trunkAngle = ShootBuilder.ClampToPotLip(0.0, genome.BendBias * config.TrunkBendScaleDeg * GrowthFormulas.DegToRad, config);
+            // ⚑P BALANCE §1.3.1: the base of #0 leans opposite to k1 (lean + TierPhase·TrunkBaseSwayRatio·A_1), no RNG.
+            double trunkAngle = ShootBuilder.ClampToPotLip(0.0,
+                ShootBuilder.TrunkBaseWorldAngleDeg(genome, config, species) * GrowthFormulas.DegToRad, config);
             tree.Append(new NodeData
             {
                 ParentIndex = -1,
@@ -44,11 +46,12 @@ namespace PocketArbor.Domain.Tree
                 Status = NodeStatus.Mature,
                 LeafScale = 0f,
                 AttachT = 1.0,
+                LastCutDay = NodeData.NoCut,
             });
 
             // #1 leader: trunk segment k = 1 (8 draws), sapling overrides of length / thickness / age.
             ShootDraws leaderDraws = ShootDraws.Next(rng);
-            NodeData leader = ShootBuilder.Build(tree, 0, in leaderDraws, config, species);
+            NodeData leader = ShootBuilder.Build(tree, 0, in leaderDraws, config, species, applyApicalDelay: false);
             leader.Length = config.SaplingLeaderLength;
             leader.Thickness = Math.Min(config.SaplingLeaderThickness, Math.Min(GrowthFormulas.MaxThicknessAt(leader.Depth, config),
                 GrowthFormulas.ThicknessCap(config.TrunkInitialThickness, leader.AttachT, true, config)));

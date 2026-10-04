@@ -59,6 +59,23 @@ namespace PocketArbor.Domain.Tree
         /// </summary>
         public double AttachT;
 
+        /// <summary>No cut recorded (<see cref="LastCutDay"/> value; also the value of <c>default(NodeData)</c>).</summary>
+        public const int NoCut = -1;
+
+        // Stored as LastCutDay + 1 so that default(NodeData) and rows created without the field mean "no cut" (−1),
+        // not "cut on day 0" (TD-030).
+        int _lastCutDayPlusOne;
+
+        /// <summary>
+        /// GrowthDayIndex of the last cut of a child of this node (BALANCE §1.3.5; proposal to ADR-0003 rev.3 / save ADR-0008):
+        /// drives back-budding and the callus age. −1 (<see cref="NoCut"/>) = never cut; missing in old data → −1.
+        /// </summary>
+        public int LastCutDay
+        {
+            readonly get => _lastCutDayPlusOne - 1;
+            set => _lastCutDayPlusOne = value < NoCut ? 0 : unchecked(value + 1);
+        }
+
         /// <summary>BALANCE §1.1: HasLeaves ≡ Depth ≥ 1 ∧ Status ∈ {Growing, Mature}. Not persisted.</summary>
         public bool HasLeaves => Depth >= 1 && (Status == NodeStatus.Growing || Status == NodeStatus.Mature);
 

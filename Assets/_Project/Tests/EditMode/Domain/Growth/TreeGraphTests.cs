@@ -43,11 +43,14 @@ namespace PocketArbor.Domain.Tests.Growth
             Assert.AreEqual(config.SaplingLeaderThickness, n[1].Thickness);
             Assert.AreEqual(config.SaplingLeaderAgeDays, n[1].AgeDays);
             Assert.AreEqual(1f, n[1].LeafScale);
-            // Leader = trunk segment k = 1 (BALANCE §1.2.3): θ_1 = −TierPhase·TrunkSwayDeg ± TrunkSwayJitterDeg (bendBias 0).
+            // Leader = trunk segment k = 1 (BALANCE §1.3.1): θ_1 = −TierPhase·TrunkSwayDeg ± TrunkSwayJitterDeg (bendBias 0).
             Assert.AreEqual(-tierPhase * species.TrunkSwayDeg * d2r, tree.WorldAngle(1), config.TrunkSwayJitterDeg * d2r + 1e-12);
             Assert.LessOrEqual(Math.Abs(n[1].Curvature), config.TrunkCurvatureJitter);
-            double apicalTarget = config.ShootBaseLength * config.ApicalLengthMultiplier;
-            Assert.That(n[1].TargetLength, Is.InRange(apicalTarget * 0.8, apicalTarget * 1.2));
+            // ⚑P §1.3.1: segment k = 1 length TrunkSegmentLength·(1 ± TrunkSegmentJitter); #0 leans TierPhase·TrunkBaseSwayRatio·A_1.
+            Assert.That(n[1].TargetLength, Is.InRange(config.TrunkSegmentLength * (1.0 - config.TrunkSegmentJitter) - 1e-12,
+                config.TrunkSegmentLength * (1.0 + config.TrunkSegmentJitter) + 1e-12));
+            Assert.AreEqual(tierPhase * config.TrunkBaseSwayRatio * species.TrunkSwayDeg * d2r, n[0].BaseAngle, 1e-12);
+            for (int i = 0; i < 3; i++) Assert.AreEqual(NodeData.NoCut, n[i].LastCutDay, "BALANCE §1.3.5: no cut yet");
 
             // Wild twig (BALANCE §1.2.8): slot 0 of #0, AttachT 0.30, side −TierPhase, world angle side·30°, Curvature 0.
             Assert.AreEqual(1, n[2].Depth);
@@ -71,16 +74,19 @@ namespace PocketArbor.Domain.Tests.Growth
         }
 
         [Test]
-        public void PlantSapling_BendBias_TiltsTrunkAndAmplifiesLeaderSway()
+        public void PlantSapling_BendBias_TiltsTrunkLeansBaseAndAmplifiesLeaderSway()
         {
             var config = GrowthConfig.CreateDefault();
             var species = SpeciesConfig.Momiji();
             var tree = TreeFactory.PlantSapling(new TreeGenome(1u, SpeciesId.Momiji, 1.0, 0.5), config, species);
             double d2r = GrowthFormulas.DegToRad;
             double lean = 0.5 * config.TrunkBendScaleDeg;
-            Assert.AreEqual(lean * d2r, tree.Nodes[0].BaseAngle, 1e-12);
-            // θ_1 = lean + TierPhase·(−1)·TrunkSwayDeg·(1 + |bendBias|) ± jitter (seed 1 → TierPhase −1).
-            double center = lean + TreeShapeAnalysis.TierPhase(1u) * -1.0 * species.TrunkSwayDeg * 1.5;
+            // ⚑P BALANCE §1.3.1: A_1 = TrunkSwayDeg·(1 + TrunkSwayBendGain·|bendBias|); #0 = lean + TierPhase·TrunkBaseSwayRatio·A_1.
+            double a1 = species.TrunkSwayDeg * (1.0 + config.TrunkSwayBendGain * 0.5);
+            int tier = TreeShapeAnalysis.TierPhase(1u);
+            Assert.AreEqual((lean + tier * config.TrunkBaseSwayRatio * a1) * d2r, tree.Nodes[0].BaseAngle, 1e-12);
+            // θ_1 = lean + TierPhase·(−1)·A_1 ± jitter (seed 1 → TierPhase −1).
+            double center = lean + tier * -1.0 * a1;
             Assert.AreEqual(center * d2r, tree.WorldAngle(1), config.TrunkSwayJitterDeg * d2r + 1e-12);
         }
 

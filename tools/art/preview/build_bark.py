@@ -61,28 +61,39 @@ def grade(im, mean_t, std_scale):
 # reference trunk colour (interior of lower trunk)
 ref = l2.crop((345, 945, 395, 1025)); rs = ImageStat.Stat(ref)
 print('ref trunk mean', [round(v) for v in rs.mean], 'std', [round(v) for v in rs.stddev])
-trunk = detail(base, 11, 0.10, 40, 185, (46, 30, 18), 24, 80, (180, 148, 104))
-trunk = grade(trunk, rs.mean, 1.05)
 from PIL import ImageEnhance
-trunk = ImageEnhance.Color(trunk).enhance(1.2)
-trunk = make_seamless_v(trunk)  # no-op safety: all layers already wrap
+
+# ---- trunk (PA-102P): flat painterly base + twisted lit ridges / dark furrows + long ink lines, like the L2 trunk.
+# Base from the reference is only low-frequency colour now (σ 5) — the old ×7 upscale read as blur.
+tb = grade(wrap_blur(base, 5), rs.mean, 0.75)
+ridge, furrow, mod = twisted_field(512, 512, 31, warp_amp=0.5)
+trunk = apply_field(tb, ridge, furrow, mod, light=0.5, dark=0.32, hi_col=(172, 136, 94))
+trunk = trunk.convert('RGBA')
+trunk.alpha_composite(twisted_strokes(512, 512, 41, 12, (192, 158, 112), (4.0, 8.0), 80, length=(0.4, 0.9), wobble=(1, 4), blur=2.0))  # light ridge strokes
+trunk.alpha_composite(twisted_strokes(512, 512, 42, 10, (52, 34, 22), (4.0, 7.0), 55, length=(0.3, 0.7), wobble=(1, 4), blur=2.5))   # soft shadow side
+trunk.alpha_composite(twisted_strokes(512, 512, 43, 16, (40, 25, 16), (1.6, 3.0), 210, length=(0.4, 0.95), wobble=(1, 4)))          # ink furrows
+trunk = trunk.convert('RGB')
+trunk = grade(trunk, rs.mean, 1.0)
+trunk = ImageEnhance.Color(trunk).enhance(1.12)
 trunk.save(OUT + 'bark_trunk.png', optimize=True)
 
-# young: lighter, warmer, smoother; #6D4C41 + olive #7A6A4F tint, fine horizontal lenticels
-yb = base.filter(ImageFilter.GaussianBlur(3))
-yb = grade(yb, (118, 92, 70), 0.6)
-young = detail(yb, 23, 0.06, 10, 90, (74, 54, 38), 8, 55, (172, 150, 110))
+# ---- young: lighter, warmer, smoother; olive #7A6A4F tint, fine horizontal lenticels, a hint of the same twist.
+yb = grade(wrap_blur(base, 6), (118, 92, 70), 0.5)
+ridge, furrow, mod = twisted_field(512, 512, 57, k=7, warp_amp=0.8)
+young = apply_field(yb, ridge, furrow, mod, light=0.22, dark=0.12, hi_col=(170, 146, 108))
+young = young.convert('RGBA')
+young.alpha_composite(twisted_strokes(512, 512, 61, 18, (178, 154, 112), (1.8, 3.5), 70, length=(0.25, 0.6), blur=1.0))
+young.alpha_composite(twisted_strokes(512, 512, 62, 14, (72, 52, 36), (0.8, 1.4), 140, length=(0.2, 0.55)))
 # lenticels: short horizontal dashes, tileable via wrap
 rnd = random.Random(5)
 lay = Image.new('RGBA', (1024, 1024), (0, 0, 0, 0)); d = ImageDraw.Draw(lay)
-for _ in range(70):
-    x = rnd.uniform(0, 512); y = rnd.uniform(0, 512); l = rnd.uniform(4, 11); a = rnd.randint(70, 130)
-    col = rnd.choice([(150, 128, 96), (84, 64, 46)])
+for _ in range(80):
+    x = rnd.uniform(0, 512); y = rnd.uniform(0, 512); l = rnd.uniform(4, 11); a = rnd.randint(80, 140)
+    col = rnd.choice([(158, 136, 102), (84, 64, 46)])
     for dx in (-512, 0, 512):
         for dy in (-512, 0, 512):
             d.line([((x + dx) * 2, (y + dy) * 2), ((x + l + dx) * 2, (y + dy) * 2)], fill=col + (a,), width=2)
 lay = lay.resize((512, 512), Image.LANCZOS)
-young = young.convert('RGBA'); young.alpha_composite(lay); young = young.convert('RGB')
-# olive tint toward #7A6A4F
+young.alpha_composite(lay); young = young.convert('RGB')
 young = Image.blend(young, Image.new('RGB', young.size, (122, 106, 79)), 0.18)
 young.save(OUT + 'bark_young.png', optimize=True)

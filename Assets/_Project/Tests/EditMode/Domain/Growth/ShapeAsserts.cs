@@ -5,10 +5,12 @@ using PocketArbor.Domain.Tree;
 
 namespace PocketArbor.Domain.Tests.Growth
 {
-    /// <summary>Role-based angle / slot assertions of BALANCE §1.2.1, §1.2.3, §1.2.6 for unpruned, unwired trees.</summary>
+    /// <summary>Role-based angle / slot assertions of BALANCE §1.2.1, §1.2.3, §1.2.6 with ⚑P §1.3.1–§1.3.2 for unpruned, unwired trees.</summary>
     internal static class ShapeAsserts
     {
         const double Eps = 1e-9;
+
+        static bool InRange(double value, double mean, double spread) => value >= mean - spread - Eps && value <= mean + spread + Eps;
 
         public static void AssertShootAngles(TreeGraph tree, GrowthConfig config, SpeciesConfig species)
         {
@@ -39,7 +41,7 @@ namespace PocketArbor.Domain.Tests.Growth
                     if (shape.IsTrunkChain(i))
                     {
                         int k = n.Depth;
-                        double amplitude = species.TrunkSwayDeg * (1.0 + Math.Abs(tree.Genome.BendBias)) * Math.Pow(config.TrunkSwayDecay, k - 1);
+                        double amplitude = ShootBuilder.TrunkSwayAmplitudeDeg(k, tree.Genome, config, species);
                         double center = lean + tier * ((k & 1) == 0 ? 1.0 : -1.0) * amplitude;
                         Assert.AreEqual(center, world, config.TrunkSwayJitterDeg + Eps, "trunk segment k=" + k + " at " + i);
                     }
@@ -63,13 +65,24 @@ namespace PocketArbor.Domain.Tests.Growth
                     {
                         double boundary = p == 0 ? 0.5 * (config.TrunkBaseSlotT0 + config.TrunkBaseSlotT1) : 0.5 * (config.LateralSlotT0 + config.LateralSlotT1);
                         bool slot0 = n.AttachT < boundary;
-                        Assert.AreEqual(tier * (slot0 ? -1 : 1), n.BranchSide, "primary side = TierPhase·(slot0 ? −1 : +1) at " + i);
+                        // ⚑P BALANCE §1.3.2: slot 1 on s_k = TierPhase·(−1)^k, slot 0 on −s_k.
+                        int sk = ShootBuilder.TierSide(nodes[p].Depth, tree.Genome.Seed);
+                        Assert.AreEqual(slot0 ? -sk : sk, n.BranchSide, "primary side = slot1 ? s_k : −s_k at " + i);
                         if (!clamped)
                         {
-                            Assert.That(Math.Abs(world), Is.InRange(species.PrimaryAngleMeanDeg - species.PrimaryAngleSpreadDeg - Eps,
-                                species.PrimaryAngleMeanDeg + species.PrimaryAngleSpreadDeg + Eps), "primary angle at " + i);
+                            bool inPrimary = InRange(Math.Abs(world), species.PrimaryAngleMeanDeg, species.PrimaryAngleSpreadDeg);
+                            // §1.3.2 apex dome: laterals of the chain top born before the crown axis take the crown-lateral angle.
+                            bool inDome = nodes[p].Depth == config.TrunkChainSegments - 1
+                                && InRange(Math.Abs(world), species.CrownLateralAngleMeanDeg, species.CrownLateralAngleSpreadDeg);
+                            Assert.IsTrue(inPrimary || inDome, "primary angle at " + i + ": " + world);
                         }
                         Assert.AreEqual(n.BranchSide, Math.Sign(world), "primary direction = side at " + i);
+                    }
+                    else if (shape.IsCrownAxis(p))
+                    {
+                        // ⚑P BALANCE §1.3.2: crown-axis laterals — world angle side·tri(CrownLateralAngleMean, Spread).
+                        if (!clamped) Assert.IsTrue(InRange(Math.Abs(world), species.CrownLateralAngleMeanDeg, species.CrownLateralAngleSpreadDeg), "dome lateral at " + i);
+                        Assert.AreEqual(n.BranchSide, Math.Sign(world), "dome lateral direction = side at " + i);
                     }
                     else if (!clamped)
                     {
