@@ -14,7 +14,7 @@
 |---|---|---|---|---|---|
 | PA-001 | Встановити Unity Hub + Unity 6.6 (6000.6.4f1) (iOS/Android modules), git-lfs; налаштувати UnityYAMLMerge | Власник | UA | 1 | In Progress (бракує модулів iOS/Android) |
 | PA-002 | **Spike**: «hello-widget» в Unity-збірці — iOS WidgetKit extension через PostProcessBuild + Android AppWidgetProvider у `.androidlib` | UA | — | 5 | Backlog |
-| PA-003 | **Spike**: baseline розміру (.ipa/.aab порожнього URP-2D проєкту зі стрипінгом) і cold start на реальних пристроях | UA | QA | 2 | Backlog |
+| PA-003 | **Spike**: baseline розміру (.ipa/.aab порожнього URP-2D проєкту зі стрипінгом) і cold start на реальних пристроях | UA | QA | 2 | Done — [звіт](../qa/reports/PA-003-2026-10-04.md); cold start не виміряно (немає пристроїв) |
 | PA-004 | **Spike**: вимір аудіо-латентності Unity (Best Latency) на iPhone і mid-tier Android; рішення про native-audio | TA | UA | 2 | Backlog |
 | PA-005 | Погодити ADR-0001…0008 і відкриті питання GDD §10 | Власник | UA, GD | 1 | Backlog |
 | PA-006 | Скелет `.claude`-воркфлоу: перевірити агентів на пробній задачі | Оркестратор | всі | 1 | Backlog |

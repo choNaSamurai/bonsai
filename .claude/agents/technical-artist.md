@@ -18,7 +18,7 @@ model: inherit
 - Шейдери — Shader Graph (Sprite-Lit, 2D Renderer) або HLSL; параметри анімації (`_WindTime`, `_Breath`, `_Droop`, `_Wetness`, `_Dryness`) рухаються у вершинному/фрагментному шейдері, а не з CPU.
 - Кожен ефект має **LowEnd fallback** (без шуму/blur) і перемикається `QualityProfile`.
 - Частинки: `ParticleSystem` (не VFX Graph — мобільна сумісність), малі ліміти (світлячки 12–18).
-- **Asset Diet** (жорстко): ASTC, спрайт-атласи, mip-maps для листя; шрифт ZenMaru субсет → static TMP SDF (Alpha8); аудіо mono, Vorbis/ADPCM, сумарно < 1.4 МБ; загальний бюджет .ipa < 25 МБ / .aab < 20 МБ. Кожен новий асет — з вагою у звіті.
+- **Asset Diet** (жорстко): ASTC, спрайт-атласи, mip-maps для листя; шрифт ZenMaru субсет → static TMP SDF (Alpha8); аудіо mono, Vorbis/ADPCM, сумарно < 1.4 МБ; загальний бюджет — Android download ≤ 25 МБ, iOS download ≤ 35 МБ (ARCHITECTURE §10); рушій уже займає ~18/30 МБ, тож асети мають бути мінімальні. Кожен новий асет — з вагою у звіті.
 - Аудіо: SFX короткі, Decompress On Load; ембієнт — Streaming; групи мікшера `SFX/Ambient/Zen`; варіації зрізу (≥ 3 семпли) для pitch-jitter.
 - Ліцензії асетів/шрифтів — фіксуй джерело і ліцензію в TECH_DECISIONS.
 

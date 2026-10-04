@@ -13,7 +13,7 @@
 | Платформи | iOS 16+, Android 10+ (API 29); Web — пріоритет 2 | Unity Web (WebGL2/WebGPU) — після MVP |
 | Частота кадрів | 120 FPS на ProMotion під час взаємодії, 60 FPS базово | В режимі споглядання — адаптивне зниження (див. §6.5) |
 | GC у кадрі | 0 B алокацій у steady-state | Перевіряється Performance-тестами (`GC.Alloc` recorder) |
-| Розмір | `.ipa` < 25 МБ, `.aab` < 20 МБ | **Ризик**: для Unity це досяжно лише з IL2CPP + High stripping + без зайвих пакетів. Spike PA-003 |
+| Розмір | Android: Play download arm64 ≤ 25 МБ (жорстка межа 30); iOS: App Store download ≤ 35 МБ, install ≤ 55 МБ | Перевизначено власником 2026-10-04 після Spike PA-003: бюджети ТЗ (.ipa < 25 / .aab < 20) недосяжні для Unity + URP — порожній проєкт уже 18.2 МБ (Android) / ~30 МБ (iOS download). Звіт: [PA-003](../qa/reports/PA-003-2026-10-04.md) |
 | Холодний старт | < 1.2 с (Flutter-ціль) | **Ризик**: для Unity реалістично 1.5–2.5 с на mid-tier. Ціль перевизначається після Spike PA-003 |
 | Аудіо-латентність | < 15 мс (Flutter-ціль) | **Ризик**: Unity на Android дає ~20–40 мс. Spike PA-004 вимірює і, за потреби, переходимо на native-audio плагін |
 
@@ -228,12 +228,30 @@ OnApplicationPause(true):
 
 ## 10. Збірка і розмір (Asset Diet)
 
-- IL2CPP, ARM64 (Android: + ARMv7 лише якщо потрібно), Managed Stripping = High (+ `link.xml` для Newtonsoft/VContainer), Strip Engine Code.
+**Бюджети (власник, 2026-10-04):**
+
+| Платформа | Метрика | Ціль | Жорстка межа | Як міряти |
+|---|---|---|---|---|
+| Android | Play download size, arm64 | ≤ 25 МБ | 30 МБ | `bundletool build-apks` + `get-size total --device-spec arm64` |
+| iOS | App Store download size | ≤ 35 МБ | — | App Store Connect / Xcode App Thinning Size Report |
+| iOS | Install size | ≤ 55 МБ | — | розмір `.app` |
+| Шрифт | ZenMaru субсет | < 450 КБ | — | без змін з ТЗ |
+| Аудіо | усі кліпи | < 1.4 МБ | — | без змін з ТЗ |
+
+Baseline порожнього URP-2D проєкту (PA-003): Android 18.2 МБ download, iOS ~30 МБ download / 40 МБ install. 88% — код рушія (`libunity` + `libil2cpp`).
+
+**Обов'язкові налаштування збірки** (виміряний ефект на Android download):
+- IL2CPP, ARM64 only; Managed Stripping = **High** (+ `link.xml`) — без нього +2.9 МБ; **Strip Engine Code** — без нього +4.9 МБ.
+- IL2CPP Code Generation = **OptimizeSize** (OptimizeSpeed: +3.7 МБ); C++ Compiler Configuration = **Release** (Master/LTO: +1.3 МБ).
+- URP Global Settings: strip unused post-processing / 2D / runtime-debug variants (−1.3 МБ).
+- Graphics API Android: Vulkan + GLES3 (GLES3-only заощадив би 0.9 МБ — відкрите рішення, §11). Application Entry: GameActivity (Activity: −0.5 МБ, не беремо).
+- Не форкати URP заради вирізання UIElements (найбільший шматок коду).
 - Видалити з `manifest.json` невикористані модулі (`com.unity.modules.*`: physics 3D, terrain, vehicles, video, AI, cloth, …).
 - Шрифт: ZenMaru Gothic subset → **static** TMP SDF-атлас (Alpha8) з фіксованим charset; dynamic fallback лише для UGC-поля.
 - Аудіо: Vorbis/ADPCM mono, `Load Type` = Decompress On Load для коротких SFX, Streaming для ембієнту; бюджет < 1.4 МБ.
 - Текстури: ASTC (iOS/Android), спрайт-атласи.
-- Перевірка бюджету — Editor-скрипт після білда (`BuildReport`), у CI пізніше.
+- Перевірка бюджету — Editor-скрипт після білда (`BuildReport`) + `bundletool get-size` з порогом; у CI пізніше. Скрипти вимірювання — у звіті PA-003 §9.
+- Внесок VContainer / R3 / UniTask / PrimeTween / Localization+Addressables / Newtonsoft ще не виміряно — повторити PA-003 на проєкті PA-101.
 
 ## 11. Відкриті питання (потребують рішення власника)
 
