@@ -44,5 +44,5 @@ game-designer (уточнити AC/баланс) → unity-architect (план/A
 `.claude/skills/` містить 50 скілів з [coreyhaines31/marketingskills](https://github.com/coreyhaines31/marketingskills) (MIT, деталі — [`vendor/marketingskills/VENDORED.md`](vendor/marketingskills/VENDORED.md)). Продуктовий контекст для них — [`.agents/product-marketing.md`](.agents/product-marketing.md). Найрелевантніші: `aso`, `launch`, `onboarding`, `paywalls`, `pricing`, `marketing-psychology`, `customer-research`, `social`, `referrals`, `content-strategy`. Оновлення — `scripts/sync-marketingskills.sh`.
 
 ## Стан середовища (2026-10-04)
-- Unity 6000.6.4f1 встановлено (бракує модулів iOS/Android — PA-001), `git-lfs` встановлено, UnityYAMLMerge налаштовано в локальному git config.
+- Unity 6000.6.4f1 встановлено з модулями iOS/Android/WebGL, `git-lfs` встановлено, UnityYAMLMerge налаштовано в локальному git config.
 - Код, написаний без Unity, вважається неперевіреним компіляцією — так і повідомляти.

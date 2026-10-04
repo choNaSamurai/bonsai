@@ -1,0 +1,26 @@
+<!--
+  Managed Stripping = High (ADR-0001, ARCHITECTURE §10). Preserve only what is reached via reflection.
+  Narrow these entries after the size spike PA-003 (BuildReport) shows their real cost.
+-->
+<linker>
+  <!-- Our assemblies: VContainer constructs types reflectively; Newtonsoft (de)serializes save DTOs. -->
+  <assembly fullname="PocketArbor.Domain" preserve="all"/>
+  <assembly fullname="PocketArbor.Application" preserve="all"/>
+  <assembly fullname="PocketArbor.Infrastructure" preserve="all"/>
+  <assembly fullname="PocketArbor.Presentation" preserve="all"/>
+  <assembly fullname="PocketArbor.Bootstrap" preserve="all"/>
+
+  <!-- DI: reflection-based injector (no source generator yet). -->
+  <assembly fullname="VContainer" preserve="all"/>
+
+  <!-- Reactive / async: generic instantiations reached through PlayerLoop injection. -->
+  <assembly fullname="R3" preserve="all"/>
+  <assembly fullname="R3.Unity" preserve="all"/>
+  <assembly fullname="UniTask" preserve="all"/>
+
+  <!-- Newtonsoft.Json: keep converters and contract resolution; the rest may be stripped. -->
+  <assembly fullname="Newtonsoft.Json">
+    <type fullname="Newtonsoft.Json.Converters.*" preserve="all"/>
+    <type fullname="Newtonsoft.Json.Serialization.*" preserve="all"/>
+  </assembly>
+</linker>

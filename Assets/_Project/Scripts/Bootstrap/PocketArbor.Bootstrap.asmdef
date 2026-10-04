@@ -1,0 +1,22 @@
+{
+    "name": "PocketArbor.Bootstrap",
+    "rootNamespace": "PocketArbor.Bootstrap",
+    "references": [
+        "PocketArbor.Domain",
+        "PocketArbor.Application",
+        "PocketArbor.Infrastructure",
+        "PocketArbor.Presentation",
+        "VContainer",
+        "R3.Unity",
+        "UniTask"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

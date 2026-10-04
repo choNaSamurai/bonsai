@@ -1,6 +1,6 @@
 # Git Flow для Pocket Arbor (Unity)
 
-> Власник: Unity Architect · Статус: **Діє** · Остання ревізія: 2026-10-03
+> Власник: Unity Architect · Статус: **Діє** · Остання ревізія: 2026-10-04
 
 Працюємо **локально**. Remote поки не підключено. **Жоден коміт, merge, tag чи rebase не робиться без явного погодження власника проєкту в чаті.** Агенти готують зміни та пропонують повідомлення коміту — комітить головна сесія лише після «так».
 
@@ -35,7 +35,7 @@
 3. **UnityYAMLMerge** для сцен/префабів (після встановлення Unity):
    ```bash
    git config merge.unityyamlmerge.name "Unity SmartMerge"
-   git config merge.unityyamlmerge.driver "'/Applications/Unity/Hub/Editor/<VERSION>/Unity.app/Contents/Tools/UnityYAMLMerge' merge -p %O %B %A %A"
+   git config merge.unityyamlmerge.driver "'/Applications/Unity/Hub/Editor/<VERSION>/Unity.app/Contents/Helpers/UnityYAMLMerge' merge -p %O %B %A %A"
    git config merge.unityyamlmerge.recursive binary
    ```
 4. **Мінімізація конфліктів у сценах**: одна сцена `Main.unity` + все інше — у префабах; одна фіча = свій префаб. Сцени помічені `lockable` — при командній роботі `git lfs lock`.
@@ -78,7 +78,7 @@
 
 - [x] `git init -b main`
 - [x] `.gitignore`, `.gitattributes` (LFS + UnityYAMLMerge), `.editorconfig`
-- [ ] Встановити `git-lfs` (`brew install git-lfs && git lfs install`)
+- [x] Встановити `git-lfs` (3.8.0; глобальні `filter.lfs.*` налаштовано, 2026-10-04). Repo-хуки (`git lfs install` у репо → `pre-push`) — перед підключенням remote
 - [x] Перший коміт на `main` (`chore: bootstrap repository`, 94969dc)
 - [x] Створити `develop` від першого коміту
 - [ ] Опційно: `brew install git-flow` (CLI-обгортка; не обов'язкова — всі кроки виконуються звичайним git)
