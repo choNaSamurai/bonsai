@@ -1,6 +1,6 @@
 # Product Marketing Context
 
-**Document version:** v3 (draft — зібрано з ТЗ та дизайн-системи, не підтверджено дослідженнями; v2 — додано ціни, мови, Dormancy-ритуал з GDD §10 Proposed)
+**Document version:** v5 (draft — зібрано з ТЗ та дизайн-системи, не підтверджено дослідженнями; v5 — ASO-метадані погоджено власником)
 **Last updated:** 2026-10-04
 
 ## Product Overview
@@ -42,6 +42,10 @@
 
 ## Competitive Landscape
 **Direct:** Prune, Viridi — менше персоналізації/реальної погоди, не про щоденний ритуал з віджетом.
+**Direct (з ASO-перевірки 2026-10-04, [ASO_NAME_REVIEW](../docs/gdd/ASO_NAME_REVIEW.md)):**
+- Pocket Bonsai (Siege Sloth Games) — найближчий за жанром («peaceful real time bonsai growing game»), але на 2026-10-04 знятий з App Store і Google Play, не розвивається з 2022–2023 (50 000+ встановлень, 4.0★). Фразу «pocket bonsai» не використовувати в метаданих і рекламі.
+- Idle Bonsai (Nordeste Digital, 06.2026) — найближчий за меседжем: procedural, «genuinely yours», «no timers», але incremental/idle з продажем дерев. Відрізняємось реальною погодою, дротом, Dormancy і віджетом.
+- Bonsai Garden: Idle Zen Tree, Bonsai Snip (щоденний пазл), Bonsai Master (покинутий) — слабкі за оцінками; ніша «bonsai» в Games відкрита.
 **Secondary:** Медитаційні додатки (Calm, Headspace) — довші сесії, немає «живого об'єкта», підписка.
 **Indirect:** Справжні кімнатні рослини/бонсай — потребують часу, місця, можуть загинути.
 
@@ -116,12 +120,22 @@
 - App Name: `Pocket Arbor: Cozy Bonsai`
 - Subtitle (iOS): `Relaxing Tree Growth Ritual`
 - Short Description (Android): `A peaceful, meditative bonsai growing ritual shaped by real-world weather.`
-- Keywords: `plant,zen,relax,meditation,pruning,mindfulness,nature,widget,garden,calm,japanese,botany,sakura,virtual`
+- Keywords: `plant,zen,relax,meditation,pruning,mindfulness,nature,widget,garden,calm,japanese,botany,sakura,virtual`  — *103 байти, перевищує ліміт Apple у 100 байтів*
+
+**ASO (Accepted, 2026-10-04)** — з [docs/gdd/ASO_NAME_REVIEW.md](../docs/gdd/ASO_NAME_REVIEW.md); погоджено власником, **замінює** значення з ТЗ вище (keywords ТЗ мали 103 байти — понад ліміт):
+- App Name (iOS + Android): `Pocket Arbor: Cozy Bonsai` (25) — без змін; запасний варіант `Quiet Arbor: Cozy Bonsai` (24), якщо власник вирішить прибрати «Pocket»
+- Subtitle (iOS): `Calm Zen Tree in Real Weather` (29); A/B-альтернатива `Prune a Tree in Real Weather` (28)
+- Short Description (Android): `Grow and prune your own bonsai tree. A calm daily ritual in your real weather.` (78)
+- Keywords (iOS): `plant,garden,relax,meditation,mindfulness,pruning,grow,japanese,asmr,widget,virtual,pet,sakura` (94 байти; без дублів з title/subtitle)
+- Не використовувати: «pocket bonsai», назви застосунків-конкурентів (Prune, Viridi, Idle Bonsai), `idle` (приводить anti-persona)
+- Домен: `pocketarbor.app` вільний (RDAP 2026-10-04) — зареєструвати; `pocketarbor.com` зайнятий третьою стороною
 
 **Локалізації (GDD §10.6, рішення власника 2026-10-04):** MVP — `en` (базова) + `ja` (лише з вичиткою носієм, інакше v1.1); `uk` відкладено до v1.1 (шрифт без кирилиці); v1.1 — `uk`, `de`, `fr`, `es`, `pt-BR`, `ko`; v1.2 — `zh-Hans`, `zh-Hant`. Сторові сторінки локалізуються разом з грою; для `ja` — окремий короткий набір ключових слів (100 байт, CJK = 2–3 байти/символ).
 
 ## Changelog
 *Newest first. One line per revision: what changed and why.*
+- v5 (2026-10-04) — ASO-метадані і назва «Pocket Arbor: Cozy Bonsai» погоджені власником (Proposed → Accepted).
+- v4 (2026-10-04) — Додано блок «ASO (Proposed, 2026-10-04)» (новий subtitle з `weather`, short description, keywords 94 байти замість 103 з ТЗ) і конкурентів Pocket Bonsai / Idle Bonsai з ASO-перевірки назви; назва без змін.
 - v3 (2026-10-04) — Локалізації: `uk` перенесено з MVP у v1.1 за рішенням власника (шрифт без кирилиці).
 - v2 (2026-10-04) — Додано Proposed-ціни IAP і каталог, мови на запуск і дорожню карту локалей, глосарій (Awakening, Master's Alley, Master's Shelf) — з GDD §10 (PA-005); чекає погодження власника.
 - v1 (2026-10-03) — Initial context, перенесено з ТЗ v3.2 і DESIGN_SYSTEM; потребує валідації дослідженням.
