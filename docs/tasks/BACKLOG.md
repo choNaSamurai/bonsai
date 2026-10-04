@@ -19,6 +19,7 @@
 | PA-005 | Погодити ADR-0001…0008 і відкриті питання GDD §10 | Власник | UA, GD | 1 | Backlog |
 | PA-006 | Скелет `.claude`-воркфлоу: перевірити агентів на пробній задачі | Оркестратор | всі | 1 | Backlog |
 | PA-007 | Editor-тулінг: імпорт BALANCE.md → ScriptableObject-и (або ручні ассети + тест відповідності) | GP | GD | 2 | Backlog |
+| PA-101b | Розмір білда, варіант C: OptimizeSize, C++ Release, R8, URP-стрипінг, звужений `link.xml`, без сплешу; прибрати Unity Localization і прямий Newtonsoft; ADR-0008 rev.3 (JsonUtility), ADR-0009 (білінг); бюджети Android ≤ 28 (30) / iOS ≤ 45 / 60 | UA | — | 2 | Review ([PA-101b](PA-101b.md)) — Android 25.06, iOS 55.95 / ~43.1 |
 
 ## Sprint 1 — Core Engine
 

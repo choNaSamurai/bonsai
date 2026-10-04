@@ -13,7 +13,7 @@ using UnityEngine.SceneManagement;
 namespace PocketArbor.Editor
 {
     /// <summary>
-    /// Idempotent project configuration (PA-101). Safe to re-run at any time:
+    /// Idempotent project configuration (PA-101, build-size settings PA-101b). Safe to re-run at any time:
     ///   Unity -batchmode -nographics -projectPath . -executeMethod PocketArbor.Editor.ProjectSetup.RunBatch -quit
     /// or via menu Pocket Arbor/Setup/Apply Project Settings.
     /// </summary>
@@ -28,6 +28,7 @@ namespace PocketArbor.Editor
         const string Renderer2DPath = RenderingDir + "/Renderer2D.asset";
         const string UrpDefaultPath = RenderingDir + "/URP_Default.asset";
         const string UrpLowEndPath = RenderingDir + "/URP_LowEnd.asset";
+        const string UrpGlobalSettingsPath = RenderingDir + "/UniversalRenderPipelineGlobalSettings.asset";
         const string MainScenePath = "Assets/_Project/Scenes/Main.unity";
         const string UrpPackagePath = "Packages/com.unity.render-pipelines.universal";
 
@@ -38,6 +39,7 @@ namespace PocketArbor.Editor
             ConfigurePlayerSettings();
             ConfigureAudio();
             var urp = ConfigureRenderPipeline();
+            ConfigureUrpShaderStripping();
             ConfigureQuality(urp.defaultAsset, urp.lowEndAsset);
             ConfigureMainScene();
             AssetDatabase.SaveAssets();
@@ -83,6 +85,10 @@ namespace PocketArbor.Editor
                 PlayerSettings.SetScriptingBackend(target, ScriptingImplementation.IL2CPP);
                 PlayerSettings.SetApiCompatibilityLevel(target, ApiCompatibilityLevel.NET_Standard);
                 PlayerSettings.SetManagedStrippingLevel(target, ManagedStrippingLevel.High);
+                // PA-101b / ARCHITECTURE §10: OptimizeSpeed costs +5.9 MB Android download (PA-003b);
+                // Master (LTO) is +1.3 MB and much slower to build, so Release explicitly.
+                PlayerSettings.SetIl2CppCodeGeneration(target, Il2CppCodeGeneration.OptimizeSize);
+                PlayerSettings.SetIl2CppCompilerConfiguration(target, Il2CppCompilerConfiguration.Release);
             }
             PlayerSettings.SetApiCompatibilityLevel(NamedBuildTarget.Standalone, ApiCompatibilityLevel.NET_Standard);
 
@@ -99,6 +105,15 @@ namespace PocketArbor.Editor
             PlayerSettings.SetUseDefaultGraphicsAPIs(BuildTarget.Android, false);
             PlayerSettings.SetGraphicsAPIs(BuildTarget.Android,
                 new[] { GraphicsDeviceType.Vulkan, GraphicsDeviceType.OpenGLES3 });
+            // R8 for release builds (-2.6 MB, PA-003b). Debug builds stay unminified for readable stack traces.
+            // Keep rules for our own JNI-facing Java/Kotlin code (ADR-0007) -> Custom Proguard File
+            // Assets/Plugins/Android/proguard-user.txt when such code appears.
+            PlayerSettings.Android.minifyRelease = true;
+            PlayerSettings.Android.minifyDebug = false;
+
+            // Unity 6 allows hiding the Unity splash on Personal; the app shows its own first frame instead.
+            PlayerSettings.SplashScreen.show = false;
+            PlayerSettings.SplashScreen.showUnityLogo = false;
 
             SetActiveInputHandlingToInputSystemPackage();
         }
@@ -172,6 +187,36 @@ namespace PocketArbor.Editor
 
             GraphicsSettings.defaultRenderPipeline = defaultAsset;
             return (defaultAsset, lowEndAsset);
+        }
+
+        /// <summary>
+        /// URP shader stripping (ARCHITECTURE §10, PA-003b: -1.8 MB Android download). Writes both the
+        /// IRenderPipelineGraphicsSettings container and the legacy serialized fields of the global settings asset
+        /// so the asset stays consistent whichever copy a URP version reads.
+        /// </summary>
+        static void ConfigureUrpShaderStripping()
+        {
+            var globalSettings = AssetDatabase.LoadMainAssetAtPath(UrpGlobalSettingsPath);
+            if (globalSettings == null)
+            {
+                throw new InvalidOperationException(UrpGlobalSettingsPath + " not found.");
+            }
+
+            if (!GraphicsSettings.TryGetRenderPipelineSettings<URPShaderStrippingSetting>(out var stripping))
+            {
+                throw new InvalidOperationException("URPShaderStrippingSetting is not available (URP is not the active pipeline?).");
+            }
+            stripping.stripUnusedVariants = true;
+            stripping.stripScreenCoordOverrideVariants = true;
+            stripping.stripUnusedPostProcessingVariants = true;
+            stripping.strip2DUnusedVariants = true;
+
+            var so = new SerializedObject(globalSettings);
+            SetBoolIfExists(so, "m_URPShaderStrippingSetting.m_StripUnusedPostProcessingVariantsAndResources", true);
+            SetBoolIfExists(so, "m_URPShaderStrippingSetting.m_Strip2DUnusedVariants", true);
+            SetBoolIfExists(so, "m_StripUnusedPostProcessingVariants", true);
+            so.ApplyModifiedPropertiesWithoutUndo();
+            EditorUtility.SetDirty(globalSettings);
         }
 
         static UniversalRenderPipelineAsset LoadOrCreateUrpAsset(string path, ScriptableRendererData rendererData)
@@ -315,6 +360,13 @@ namespace PocketArbor.Editor
             var p = so.FindProperty(name);
             if (p != null) p.intValue = value;
             else Debug.LogWarning("[PA-101] Property not found: " + name);
+        }
+
+        /// <summary>For legacy/optional fields: absent in a future URP version is not an error.</summary>
+        static void SetBoolIfExists(SerializedObject so, string path, bool value)
+        {
+            var p = so.FindProperty(path);
+            if (p != null && p.propertyType == SerializedPropertyType.Boolean) p.boolValue = value;
         }
 
         static void SetRelativeInt(SerializedProperty parent, string name, int value)

@@ -8,9 +8,33 @@
 ## Контекст
 ТЗ §5.3 / Архітектура §2.3: атомарний запис, захист від ENOSPC, bit-rot, урізаних файлів, «отруєного» перезапису бекапу.
 
+> **Ревізія 3** (2026-10-05, PA-101b, статус ревізії — Proposed): серіалізатор — **`UnityEngine.JsonUtility`** замість Newtonsoft. Розділ «Серіалізатор (rev.3)» нижче має пріоритет над згадками Newtonsoft, `Required.Always` і кастомного `JsonConverter` в інших розділах цього ADR (у т.ч. в ревізії 2).
+
+### Серіалізатор (rev.3)
+**Чому.** Звіт [PA-003b](../qa/reports/PA-003b-2026-10-05.md): Newtonsoft коштує ~4.2 МБ Android download / ~8–10 МБ iOS install (тягне `System.Xml` + `System.Data`). Зараз його все одно тримає Unity IAP 5, але щойно білінг перейде на власний плагін (ADR-0009, v1.1), ці мегабайти звільняються — лише якщо **наш** код Newtonsoft не використовує. Пряму залежність `com.unity.nuget.newtonsoft-json` прибрано з manifest (PA-101b). Бонус: `JsonUtility` — нативний, швидший і з меншими алокаціями.
+
+**Як `JsonUtility` поводиться з числами** (Unity 6000.6.4f1, виміряно `JsonUtilityContractTests`, EditMode; серіалізатор нативний — та сама реалізація в плеєрі, але підтвердити на IL2CPP-пристрої в PA-205):
+| Тип | Поведінка | Наслідок для DTO |
+|---|---|---|
+| `int`, `long`, `ulong`, `bool`, `string` | точний round-trip, включно з `long.MinValue/MaxValue`, `ulong.MaxValue` | дозволено |
+| `float` | побітовий round-trip (20 000 випадкових значень, 0 розбіжностей); `-0f` → `0` | дозволено |
+| `double` | пише найкоротше round-trip-представлення, **але читач не коректно округлює**: 19% випадкових значень (3858 / 20 000) повертаються з похибкою до **2 ULP** (напр. `123456789.12345679` → +1 ULP); субнормальні → `0`; `-0.0` → `0` | **`double`-поля в DTO заборонені** |
+| `NaN`, `±Infinity` | пишуться голими токенами `NaN`/`Infinity` (невалідний JSON), JsonUtility сам їх читає | заборонено (див. нижче) |
+| відсутнє поле | тихо `default(T)` — поняття «required» немає | явна валідація |
+
+**Правила DTO** (Infrastructure, `PocketArbor.Infrastructure.Persistence`):
+1. DTO — `[Serializable] sealed class` з **публічними полями** (не властивостями), масиви замість `List<T>` там, де розмір відомий; жодних атрибутів серіалізації в Domain.
+2. **`double` доменної моделі → `long` через `BitConverter.DoubleToInt64Bits`** (поле з суфіксом `Bits`, напр. `lengthBits`). Це дає побітовий round-trip незалежно від форматування і культури. `float` — як є. Людська читабельність сейву не вимога; для дебагу — Editor-утиліта, що друкує DTO з розкодованими `double`.
+3. **Non-finite заборонені**: мапер Domain → DTO перевіряє `double.IsFinite` для кожного значення і кидає `InvalidOperationException` (баг домену, сейв не пишемо — лишається попередній валідний файл). При читанні `long`-біти, що декодуються в NaN/∞, = пошкоджений файл → `.bak`/карантин.
+4. **Обов'язкові поля**: кожен DTO має `bool IsValid(out string error)`; поля-маркери (`schemaVersion > 0`, `nodes != null`, довжини масивів узгоджені, `parent` в межах) перевіряються після `FromJson`; провал = пошкоджений файл. Для числових полів, де 0 — валідне значення, «присутність» гарантує хеш envelope + `schemaVersion` (файл пишемо лише ми), тож окрема перевірка присутності кожного поля не потрібна.
+5. `enum` — рядком (`status`, `species`), парсинг з валідацією; невідоме значення = пошкоджений файл.
+6. Тест-гейт (PA-205): reflection-тест «жодного `double`/`decimal`/`Dictionary` у типах `*SaveDto`»; round-trip 100 випадкових дерев → JSON → снапшот `BitwiseEquals`; той самий тест — у PlayMode-збірці на IL2CPP-пристрої.
+
+**Альтернативи, розглянуті в rev.3**: (а) Newtonsoft з кастомним `JsonConverter` для `double` (`"R"`) — працює, але закриває −4 МБ важіль ADR-0009; (б) `double` рядками `"R"` у DTO — залежить від `double.Parse` Mono BCL (IL2CPP), коректність округлення якого не гарантована, і вдвічі довше; (в) власний бінарний формат — найкомпактніший, але без читабельності структури й з власним версіонуванням полів; лишаємо для Хроніки (ADR-0003). Обрано `long`-біти в JSON.
+
 ## Рішення
 - `AtomicFileStore` (Infrastructure, реалізує порт `ISaveStore`):
-  1. `TreeSnapshot` + `SoilState` + метадані → JSON (Newtonsoft, `schemaVersion`) → UTF-8 → SHA-256 → `[64 hex][json]`.
+  1. `TreeSnapshot` + `SoilState` + метадані → DTO → JSON (`JsonUtility`, `schemaVersion`; правила — «Серіалізатор (rev.3)») → UTF-8 → SHA-256 → `[64 hex][json]`.
   2. Запис у `tree_state.json.tmp` (`FileStream`, `Flush(true)`).
   3. `File.Replace(tmp, primary, bak)`; якщо primary ще не існує — `File.Move`. Fallback на `IOException` — `Copy + Delete`.
   4. Читання: `length <= 64` → corrupted; хеш не збігся → `.bak`; успіх з `.bak` → **негайний перезапис primary**; битий файл → `quarantine/<timestamp>.json`.

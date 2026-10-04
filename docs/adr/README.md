@@ -18,3 +18,4 @@
 | [0006](0006-ui-ugui-canvas.md) | uGUI Canvas + TextMeshPro + PrimeTween | Proposed |
 | [0007](0007-native-platform-layer.md) | Native-плагіни: хаптика, аудіосесія, віджети, геолокація | Proposed |
 | [0008](0008-persistence.md) | AtomicFileStore з SHA-256 envelope | Proposed |
+| [0009](0009-billing-unity-iap.md) | Білінг: Unity IAP 5 для MVP; власний плагін StoreKit 2 + Play Billing — опція v1.1 | Proposed |

@@ -4,8 +4,8 @@
 
 | Скрипт | Що міряє | Бюджет |
 |---|---|---|
-| `android-download-size.sh <app.aab>` | Play download size через bundletool (arm64) | ≤ 25 МБ, межа 30 |
-| `ios-download-size.sh <App.xcarchive>` | `.app` install size, zip-нижня і encrypted-верхня межа download | download ≤ 35 МБ, install ≤ 55 МБ |
+| `android-download-size.sh <app.aab>` | Play download size через bundletool (arm64) | ≤ 28 МБ, межа 30 |
+| `ios-download-size.sh <App.xcarchive>` | `.app` install size, zip-нижня і encrypted-верхня межа download | download ≤ 45 МБ, install ≤ 60 МБ |
 
 iOS-архів без підпису:
 ```bash

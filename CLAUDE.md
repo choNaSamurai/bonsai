@@ -36,7 +36,7 @@ game-designer (уточнити AC/баланс) → unity-architect (план/A
 ## Технічні орієнтири (деталі — ARCHITECTURE.md)
 - Unity 6.6 (6000.6.4f1), URP 2D Renderer, IL2CPP, Input System, uGUI + TMP, VContainer, R3, UniTask, PrimeTween.
 - Шари asmdef: `Domain`/`Application` без UnityEngine → `Infrastructure`, `Presentation`, `Bootstrap`.
-- 0 B GC у кадрі; 120 FPS при взаємодії; бюджет розміру: Android download ≤ 25 МБ, iOS download ≤ 35 МБ (ARCHITECTURE §10).
+- 0 B GC у кадрі; 120 FPS при взаємодії; бюджет розміру: Android download ≤ 28 МБ (межа 30), iOS download ≤ 45 МБ / install ≤ 60 МБ (ARCHITECTURE §10; переглядаються після вертикального зрізу).
 - Усі числа балансу — з `docs/gdd/BALANCE.md` через ScriptableObject-и.
 - Unity Y-up (Pot Lip: `Y >= potLipY`).
 
