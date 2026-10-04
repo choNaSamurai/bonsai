@@ -1,0 +1,18 @@
+{
+    "name": "PocketArbor.DevTools",
+    "rootNamespace": "PocketArbor.DevTools",
+    "references": [
+        "PocketArbor.Domain"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "UNITY_EDITOR"
+    ],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

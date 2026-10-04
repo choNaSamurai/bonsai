@@ -26,8 +26,13 @@
 | ID | Задача | Owner | Support | SP | Статус |
 |---|---|---|---|---|---|
 | PA-101 | Скафолдинг Unity-проєкту: URP 2D, asmdef-шари, VContainer/R3/UniTask/PrimeTween, Input System, Force Text, Player Settings (IL2CPP, ARM64, 120 FPS, ProMotion PostProcess, Privacy Manifest), Quality профілі, стрипінг | UA | — | 3 | Done ([PA-101](PA-101.md)) |
-| PA-102 | Domain: `TreeGraph` (ADR-0003), `GrowthGrammar` з лімітом 200, Небарі (NaN-guard, експ. насичення), Фенікс, PCG32, `IClock` + EditMode-тести | GP | GD, QA | 5 | Backlog |
-| PA-103 | `TreeRenderer`: процедурний меш гілок (Безьє-стрічки, круглі стики, 1 draw call), `LeafInstancer`, вітер у шейдері; 0 GC у кадрі | UA | TA | 5 | Backlog |
+| PA-102 | Domain: `TreeGraph` (ADR-0003), `GrowthGrammar` з лімітом 200, Небарі (NaN-guard, експ. насичення), Фенікс, PCG32, `IClock` + EditMode-тести | GP | GD, QA | 5 | Review ([PA-102](PA-102.md)) |
+| PA-102V | Візуальний прототип росту: Play Mode сцена, гілки лініями (товщина з моделі), бруньки/листя кружечками, повзунок «день 0→120» (таймлапс), вибір породи / seed / температури. Тимчасовий debug-рендер, не замінює PA-103 | GP | GD | 2 | Review ([PA-102V](PA-102V.md)) |
+| PA-102S | Форма бонсаю за концептом L2: AttachT і яруси вздовж стовбура, конусність th_cap, S-стовбур, горизонтальні гілки, подушки листя (TreeShapeAnalysis), Небарі; оновлення прототипу GrowthPreview ([PA-102S](PA-102S.md)) | GP | UA, GD | 5 | Review |
+| PA-103S | Стиль-зріз L2 у прототипі: текстури з референсу (подушки листя, кора trunk/young, горщик, ґрунт, васі) + текстурований рендер у GrowthPreview, порівняння поруч із референсом | TA, GP | UA | 5 | Done |
+| PA-102P | Форма під референс L2 (Momiji Styled ≈ realism_l2_painterly): S-стовбур, висота й товщина відносно горщика, 6–7 ярусів з проміжками, окремі подушки, товсте звивисте Небарі, голі «ноги» гілок, back-budding; метрика збігу силуету з накладанням | GD, GP | TA, UA | 5 | Review |
+| PA-103a | Рендер L2 — гілки й геометрія (ADR-0004 rev.2): `TreeGeometry` (Domain, спільна для рендеру/хіт-тесту/дроту), C1-сплайни осей, кріплення за AttachT з «коміром», профіль конусності, Небарі в мешу стовбура, мальована кора trunk/young, вітер у шейдері; 0 GC у кадрі | UA | TA | 5 | Backlog |
+| PA-103b | Рендер L2 — листя подушками: пуфи зі спрайтів атласу D5 (до появи — Editor-плейсхолдер, TD-020), сортування, нижня тінь, сезони/Dormancy через матеріал, спільний вітер; LowEnd-профіль проти overdraw | UA | TA | 5 | Backlog |
 | PA-104 | `GestureRouter` (ADR-0005): 2-пальцевий pan/zoom завжди, abort інструмента, deadzones Ingress/Egress, Slash-to-Commit, pinch window, snapping + гістерезис | GP | UA, QA | 5 | Backlog |
 | PA-105A | Секатор: зріз піддерева, калюс, падіння гілки (пул), заборона зрізу стовбура | GP | TA | 3 | Backlog |
 | PA-105B | Дріт: сектор ±π/4, Pot Lip через FK (Unity Y-up!), 14 днів, springback, time-jump guard | GP | — | 3 | Backlog |
@@ -71,7 +76,7 @@
 | PA-401B | Нативні віджети: iOS WidgetKit (+ Lock Screen маска), Android AppWidgetProvider + FileProvider | UA | UI | 5 | Backlog |
 | PA-402 | Unity IAP 5: каталог, acknowledge, Restore FSM, Family Sharing, Privacy Manifest | GP | UI, QA | 5 | Backlog |
 | PA-403 | Профайлінг: 0 GC, adaptive frame pacing, батарея у фоні, memory warnings | UA | QA | 4 | Backlog |
-| PA-404 | Нотифікації, ASO (marketingskills: `aso`, `launch`), перевірка бюджетів розміру, Google Play closed test | GD | QA, UA | 4 | Backlog |
+| PA-404 | Нотифікації (⚠ вимкнути `RequestAuthorizationOnAppLaunch` у NotificationsSettings — запит дозволу лише після онбордингу), ASO (marketingskills: `aso`, `launch`), перевірка бюджетів розміру, Google Play closed test | GD | QA, UA | 4 | Backlog |
 
 **Gate 4**: віджети стабільні; покупки підтверджуються; білд в бюджеті; готово до сабміту.
 

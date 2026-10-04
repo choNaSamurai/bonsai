@@ -1,6 +1,6 @@
 # Архітектура Pocket Arbor на Unity
 
-> Власник: **Unity Architect** · Статус: **Draft v0.2** (очікує погодження) · 2026-10-04 (PA-101: фактичні версії пакетів, структура Assets)
+> Власник: **Unity Architect** · Статус: **Draft v0.4** (очікує погодження) · 2026-10-05 v0.4 (PA-102P: §4 — `LastCutDay`, `AxisRemain`/`InPad`/`BackBudDist`, `rulesVersion`; §6.1 — горщик як масштаб сцени і кадрування камери; §6.2–6.3 — корені Небарі, подушки-кластери) · v0.3 2026-10-05 (PA-102/PA-102S: модель §4 — нові поля, стан дерева, `TreeShapeAnalysis`, детермінізм; рендер §6.2–6.3 під L2 Painterly) · v0.2 2026-10-04 (PA-101: фактичні версії пакетів, структура Assets)
 > Джерело вимог: [`reference/flutter-v3.2/`](../reference/flutter-v3.2/) — ТЗ, архітектура і дизайн-система, написані під Flutter. Цей документ **замінює** Flutter-специфічні частини; рушій-незалежні вимоги (математика росту, ґрунт, онбординг, комплаєнс) переходять у [GDD](../gdd/GDD.md) і [BALANCE](../gdd/BALANCE.md) без змін.
 > Ключові рішення оформлені як ADR у [`docs/adr/`](../adr/).
 > Оновлення 2026-10-05 (PA-101b): бюджети розміру — варіант C (§1, §10), стек без Unity Localization і прямого Newtonsoft (§2, §2.1, §8), білінг — ADR-0009.
@@ -28,8 +28,8 @@
 | DI | Riverpod providers | **VContainer** | [0002](../adr/0002-layered-assemblies.md) |
 | Реактивний стан | Riverpod Notifier | **R3** (`ReactiveProperty`, `Observable`) | [0002](../adr/0002-layered-assemblies.md) |
 | Async | Dart Future | **UniTask** | [0002](../adr/0002-layered-assemblies.md) |
-| Модель дерева | `@immutable TreeNode` + `copyWith` | **Плоска таблиця вузлів (SoA) + версіонування**, незмінні снапшоти для збереження/хроніки | [0003](../adr/0003-tree-data-model.md) |
-| Рендер дерева | `TreeRenderBox`, `drawPath` ×4, `drawRawAtlas` | **Процедурний Mesh гілок (1 draw call) + інстансинг листя (1 draw call)**, вітер — у vertex shader | [0004](../adr/0004-procedural-tree-rendering.md) |
+| Модель дерева | `@immutable TreeNode` + `copyWith` | **Плоска таблиця вузлів (SoA) + версіонування**, `AttachT`, похідний аналіз форми, незмінні снапшоти для збереження/хроніки | [0003](../adr/0003-tree-data-model.md) |
+| Рендер дерева | `TreeRenderBox`, `drawPath` ×4, `drawRawAtlas` | **Процедурний Mesh гілок уздовж C1-осей (1 draw call) + подушки листя з пуфів (1 draw call)**, вітер — у vertex shader | [0004](../adr/0004-procedural-tree-rendering.md) |
 | Шейдери | GLSL `rain_sheen.frag` | **Shader Graph / HLSL** (URP 2D Sprite-Lit) | [0004](../adr/0004-procedural-tree-rendering.md) |
 | Ввід | Pointer dispatcher + InteractiveViewer | **Input System + EnhancedTouch**, власний `GestureRouter` | [0005](../adr/0005-input-gesture-router.md) |
 | UI | Flutter widgets | **uGUI Canvas + TextMeshPro** | [0006](../adr/0006-ui-ugui-canvas.md) |
@@ -111,50 +111,68 @@ Bootstrap ──► Presentation ──► Application ──► Domain
      └────► Infrastructure ──────────┘   (реалізує інтерфейси Application/Domain)
 ```
 
-- **Domain** — 100% чистий C# (аналог «Pure Dart»): `TreeGraph`, `GrowthGrammar`, `SoilSimulation`, `OfflineCatchUp`, `WireGuardrails`, `SeedGenome`, `PhoenixProtocol`, `IClock`, `IRandomSource` (PCG32 — детермінований на всіх платформах, на відміну від `System.Random`/`UnityEngine.Random`). Математика у `double`.
+- **Domain** — 100% чистий C# (аналог «Pure Dart»): `TreeGraph`, `TreeShapeAnalysis`, `TreeGeometry`, `GrowthSimulator` (граматика росту), `SoilSimulation`, `OfflineCatchUp`, `WireGuardrails`, `SeedGenome`, `PhoenixProtocol`, `IClock`, `IRandomSource` (PCG32 — детермінований на всіх платформах, на відміну від `System.Random`/`UnityEngine.Random`). Математика у `double`.
 - **Application** — use-cases та стан гри: `GardenSession` (власник `TreeGraph` + `SoilState`), команди `Prune`, `Wire`, `Water`, `Mist`, `PlantSeed`, `OnboardingFlow`, порти (`ISaveStore`, `IWeatherProvider`, `IHaptics`, `IAudioCues`, `IWidgetPublisher`, `IClock`). Публікує доменні події (`NodePruned`, `SoilChanged`, …) через R3 `Subject`/`ReactiveProperty`.
 - **Infrastructure** — реалізації портів: `AtomicFileStore`, `OpenMeteoClient`, `LocationProvider`, `NativeHaptics`, `NativeAudioSession`, `WidgetSnapshotPublisher`, `UnityIapStore`, `LocalNotifications`, `UnityClock`.
-- **Presentation** — `TreeRenderer`, `LeafInstancer`, `PotView`, `SkyBackdrop`, `CameraRig`, `GestureRouter`, `ToolController`s, `AudioCuePlayer`, `HapticsFeedbackRouter`, UI-в'юшки (`TreeHudView`, `BottomToolDockView`, …). **Побічні ефекти (звук/хаптика/віджет) ініціюються тут**, не в Domain/Application (Резолюція 3 оригіналу).
+- **Presentation** — `TreeRenderer` (`BranchMeshBuilder`, `FoliageMeshBuilder`), `PotView`, `SkyBackdrop`, `CameraRig`, `GestureRouter`, `ToolController`s, `AudioCuePlayer`, `HapticsFeedbackRouter`, UI-в'юшки (`TreeHudView`, `BottomToolDockView`, …). **Побічні ефекти (звук/хаптика/віджет) ініціюються тут**, не в Domain/Application (Резолюція 3 оригіналу).
 - **Bootstrap** — `RootLifetimeScope` реєструє все; `AppLifecycleObserver` (`OnApplicationPause`/`OnApplicationFocus`) запускає save, catch-up та паузу аудіо.
 
 ## 4. Модель даних дерева (→ ADR-0003)
 
-Оригінал використовує рекурсивне незмінне дерево `TreeNode` з `copyWith`. Для Unity пропонується **плоска таблиця вузлів**:
+Оригінал використовує рекурсивне незмінне дерево `TreeNode` з `copyWith`. Для Unity — **плоска таблиця вузлів** (реалізовано в PA-102, розширюється в PA-102S):
 
 ```csharp
-// PocketArbor.Domain — no UnityEngine
+// PocketArbor.Domain.Tree — no UnityEngine
 public struct NodeData
 {
-    public int Id;              // стабільний id (монотонний лічильник), не індекс
-    public int ParentIndex;     // -1 для кореня (стовбура)
+    public int Id;              // стабільний id (монотонний, < NextId), не індекс
+    public int ParentIndex;     // -1 лише для #0 (стовбур)
     public byte Depth;
     public double Length;       // біологічні units
-    public double Thickness;
-    public double BaseAngle;    // рад, відносно батька
+    public double TargetLength; // ціль видовження (BALANCE §1.1)
+    public double Thickness;    // діаметр в ОСНОВІ вузла, ніколи не зменшується
+    public double BaseAngle;    // рад, відносно осі батька
     public double CurrentAngle; // з урахуванням дроту
-    public double Curvature;
+    public double Curvature;    // [-1, 1], вигин сегмента
+    public double AttachT;      // [0, 1] — де на батькові починається вузол; апікальні = 1 (PA-102S)
+    public sbyte BranchSide;    // 0 — стовбур/апікальний, ±1 — бічний на цьому боці (TD-013)
     public int AgeDays;
-    public NodeStatus Status;   // Bud, Growing, Mature, Pruned, Dormant
+    public NodeStatus Status;   // Bud, Growing, Mature
     public float LeafScale;     // 0..1
     public float FlowerStage;   // 0..1
     public long WiredAtUtcMs;   // 0 = без дроту
     public byte WireProgressDays; // 0..14
+    public int LastCutDay;      // GrowthDayIndex останнього зрізу ДИТИНИ цього вузла; -1 = не було (PA-102P, ADR-0003 rev.3)
 }
 
 public sealed class TreeGraph
 {
-    public const int MaxNodes = 200;
-    readonly NodeData[] _nodes = new NodeData[MaxNodes]; // преалокація
-    public int Count { get; private set; }
-    public int Version { get; private set; } // ++ на кожну мутацію → рендер перебудовує меш лише при зміні
-    public ReadOnlySpan<NodeData> Nodes => _nodes.AsSpan(0, Count);
-    // Мутації тільки через доменні операції: Grow(), Prune(id), Wire(id, angle), Tick(hours) …
-    public TreeSnapshot ToSnapshot();          // незмінна копія для save/хроніки
-    public static TreeGraph FromSnapshot(TreeSnapshot s);
+    public const int Capacity = 200;                       // преалокація NodeData[200]
+    public int Count { get; }
+    public int Version { get; }                            // ++ на кожну мутацію вузлів → перебудова мешу/кешів
+    public TreeGenome Genome { get; }                      // seed, species, vigor, bendBias — незмінні
+    public GrowthState Growth { get; }                     // лічильники години/доби, ShootCredit, Σ-факторів, Frozen
+    public int NextId { get; }
+    public int PlantedRulesVersion { get; }                // GrowthRules.Version на посадці (ADR-0003 §8; додається з PA-205)
+    public ReadOnlySpan<NodeData> Nodes { get; }
+    // Мутації — лише доменні операції: GrowthSimulator.SimulateHour/DailyStep, TreePruning.Prune, дріт (PA-105B)
+    public TreeSnapshot ToSnapshot();                      // незмінна копія для save/хроніки/тестів
+    public static bool TryFromSnapshot(TreeSnapshot s, out TreeGraph g, out string error);
 }
 ```
 
-Чому: рендер і хіт-тест читають `ReadOnlySpan` без алокацій; Prune — це компакція масиву з переіндексацією батьків (O(n), n ≤ 200); снапшот незмінний, тож «чистота стану» з оригіналу зберігається на межі збереження/хроніки. Каскадне очищення дроту (PA-105A) стає тривіальним — дріт зберігається у самому вузлі.
+**Похідні — не зберігаються, рахуються чистими функціями Domain** (O(n), 0 B GC, преалоковані буфери результату, викликач перераховує на зміну `Version`):
+- `TreeShapeAnalysis` — порядок гілки (`Order`/`OrderEff`), стовбурний ланцюг (`ChainIndex`) і вісь крони, `ApicalChild`, `TipDistance`, **`AxisRemain`, `InPad`** (зона подушки: останні `PadDepth` вузлів кожної осі гілки і все, що від них відходить), `IsLeafy` (через `InPad`), `PadId`/`PadSize`, **`BackBudDist`** (відстань до свіжого зрізу, бек-бадінг) — BALANCE §1.2.0, §1.3.4–§1.3.5. Вхід — таблиця вузлів + `ShapeAnalysisParams` (у т.ч. **`GrowthDayIndex`**); результат валідний для пари (`Version`, `GrowthDayIndex`). Споживачі: ріст (ролі вибору батька, бек-бадінг), рендер, хіт-тест, `PruneToStyle`, Хроніка/стилі.
+- `TreeGeometry` (PA-103) — C1-криві осей, основа бічної дитини на кривій батька за `AttachT`, точки й дотичні; одна геометрія для рендеру (§6.2), хіт-тесту (§7.1) і дроту/Pot Lip.
+- `HasLeaves`, `TierPhase` (біт seed), світові кути.
+
+**Стан зрізу** (ADR-0003 rev.3 §2): `LastCutDay` ставить лише `TreePruning.Prune` батькові зрізаного вузла (`= GrowthDayIndex`; 0 — валідний день, «немає» = −1, усі нові вузли — через одну фабрику з −1). Одне поле дає і бек-бадінг (×6 вага вибору батька в радіусі 2 ребер протягом 14 діб росту, лише `ord ≥ 1`), і вік калюсу для рендеру. Апікальна затримка стовбура (`AgeDays ≥ 6 + 3k`) нового стану не потребує.
+
+**Детермінізм** (ADR-0003 §6): PCG32, stream = номер доби (посадка — 0); рівно 8 викликів `u()` на пагін і 18 на посадку (PA-102P бюджет не змінює). Гарантія **A** — побітово однаковий снапшот на тому ж білді/платформі (онлайн ≡ catch-up ≡ save/load шматками). Між платформами (Mono ↔ IL2CPP ARM64) — лише очікування **B**: та сама структура, неперервні значення до ULP (`Math.Exp/Pow`, FMA). Тому `#dna=` передає **геном**, а не дерево; «те саме дерево» на іншому пристрої — лише через снапшот/зображення.
+
+**Версія правил росту** (ADR-0003 §8): `GrowthRules.Version` (const у Domain; 1 — PA-102S, **2 — PA-102P**) інкрементується в тому ж коміті, що змінює результат росту для того самого геному й історії. У коді — один набір правил; сейв зберігає стан і `rulesVersion`, дерево ніколи не переграється від seed → нова версія діє лише на ріст далі, вже виросла форма не змінюється. Фікстури детермінізму несуть `rulesVersion` і падають з вимогою перегенерації при розбіжності.
+
+Чому таблиця: рендер і хіт-тест читають `ReadOnlySpan` без алокацій; Prune — компакція масиву з переіндексацією батьків (O(n), n ≤ 200); снапшот незмінний, тож «чистота стану» з оригіналу зберігається на межі збереження/хроніки. Каскадне очищення дроту (PA-105A) тривіальне — дріт зберігається у самому вузлі. Схема сейву — ADR-0008 (`schemaVersion: 1`).
 
 > **Увага, система координат**: у Unity вісь Y дивиться **вгору**. Правило Pot Lip з ТЗ ($Y_C \le Y_{pot\_lip}$, екранні координати Flutter) у Unity: **$Y_C \ge Y_{pot\_lip}$** для всіх вузлів піддерева.
 
@@ -183,20 +201,46 @@ OnApplicationPause(true):
 
 ### 6.1. Сцена
 - URP **2D Renderer**, одна ортографічна камера, `Light2D` (Global) для циркадного освітлення (колір/інтенсивність з токенів [DESIGN_SYSTEM §3.1](../reference/flutter-v3.2/DESIGN_SYSTEM_AND_UI_SPEC.md)).
-- Шари (Sorting Layers): `Backdrop` (небо-градієнт + текстура васі) → `Pot` → `Tree` → `Leaves` → `FX` → UI (Screen Space – Overlay Canvas).
+- Шари (Sorting Layers): `Backdrop` (небо-градієнт + текстура васі) → `Pot` → `Tree` (гілки, коріння) → `SoilFront` (мох/ґрунт поверх коріння Небарі) → `Leaves` → `FX` → UI (Screen Space – Overlay Canvas).
 - Статичні шари (горщик, фон) — звичайні спрайти; кешування в RenderTexture не потрібне (у Flutter воно було через RepaintBoundary — тут draw-calls дешеві, а VRAM-thrashing на foldables знімається автоматично).
 
-### 6.2. Гілки — один процедурний Mesh
-- `TreeRenderer` тримає **один** `Mesh` (MarkDynamic) і преалоковані `NativeArray<Vertex>` / `NativeArray<ushort>` під 200 сегментів × N вершин.
-- Кожен сегмент — стрічка (ribbon) вздовж кубічної кривої Безьє з товщиною від `Thickness` батька до свого; на з'єднаннях — круглі «капи» (аналог `StrokeCap.round`, прибирає T-joints).
-- Меш **перебудовується лише коли `TreeGraph.Version` змінився** (ріст, зріз, дріт), а не щокадру. Перебудова — через `Mesh.SetVertexBufferData` без алокацій; за потреби — Burst job.
-- **4 яруси товщини** з оригіналу перетворюються на атрибут вершини (tier → колір кори/текстура), а не на 4 draw calls: усе дерево = **1 draw call**.
-- **Вітер** (Perlin, ±0.8°, період 3.5 с) і **дихання Дзен** (Y×1.015) — у vertex shader за атрибутом «гнучкості» (глибина вузла). CPU-вартість анімації ≈ 0.
+**Горщик — масштаб сцени** (PA-102P, BALANCE §1.3.0, ADR-0004 §4a, TD-030):
+- Дерево рендериться в units моделі 1:1; горщик за замовчуванням має **фіксовану** ширину зовнішнього переднього краю **92 units** і не підлаштовується під дерево (відношення H/P ≈ 1.42, W/P ≈ 1.15 на Д80 Styled = пропорції референсу L2).
+- **`PotConfig`** — ScriptableObject у Presentation-конфігах (`Assets/_Project/Config/Pots/pot_<id>.asset`), один на горщик каталогу (BALANCE §9.3: `pot_tokoname` — дефолт, `pot_kuro`, `pot_celadon`; `MonetizationConfig.Catalog[]` посилається на `PotConfig` за `PotId` = `ProductId`). Поля: `PotId`, спрайти корпусу і `SoilFront`, **`FrontWidthUnits`** (92), нормалізовані координати спрайта — зовнішній передній край (ліво/право), верх бортика (= y 0 моделі), лінія ґрунту, точка основи стовбура (45% між переднім і заднім внутрішнім краєм, TD-034). Читають лише `PotView`, `SoilFront` і `CameraFramer`.
+- **Domain про горщик не знає**: Pot Lip (`Y ≥ potLipY`) і основа #0 = (0, 0) — у координатах моделі; косметичний горщик не може змінити ріст, хіт-тест чи дріт.
+- **MVP-правило**: усі горщики каталогу мають `FrontWidthUnits = 92` (Editor-валідатор `PotConfig`); інша ширина змінює сприйняття того самого дерева і AC пропорцій — лише рішенням GD. До появи `PotConfig` прототип тримає `TreeRenderConfig.PotWidthUnits = 92` (замість `clamp(0.62·W, 60, 170)`, TD-024).
+- Схема `PotConfig` — Unity Architect (PA-103a), асети й координати — Technical Artist (PA-108). *(BALANCE §1.3.0 і PA-102P посилаються на «каталог горщиків PA-203» — у BACKLOG PA-203 = візуальні стани ґрунту; каталог/Полиця ще не мають задачі.)*
 
-### 6.3. Листя, квіти, бруньки — інстансинг
-- `LeafInstancer`: `Graphics.RenderMeshInstanced` з преалокованим `Matrix4x4[200 * k]` або один комбінований quad-меш з UV-атласом. **1 draw call**.
-- Guard з оригіналу зберігається: `LeafScale < 0.02` → інстанс не додається (уникаємо вироджених матриць).
-- Атлас листя з mip-maps, `Bilinear/Trilinear` фільтр (аналог `FilterQuality.medium`).
+**Кадрування камери** (`CameraFramer`, Presentation, чиста функція + `CameraRig`; TD-030; числа — **Proposed**, тонують UI/GD):
+- Камера кадрує **сцену від горщика**, а не bounds дерева; гравець зумить/панорамує *відносно* базового кадру (pinch, ADR-0005), подвійний тап повертає базовий кадр.
+- **Сцена-рамка** = safe area мінус HUD і док інструментів (rect дає UI). **Базовий кадр z = 1 = кадр референсу L2**: ширина горщика = `PotScreenWidthFraction` 0.737 ширини рамки (566/768 px) → видима ширина `V₁ = 92 / 0.737 ≈ 125` units; верх горщика — на `RimFromBottom` 0.224 висоти рамки; центр по X — центр горщика (не дерева: асиметричне дерево не «їздить» кадром).
+- **Зум** `z ∈ [ZoomMin, ZoomMax]`, видима ширина `V = z·V₁`, висота `V / aspect`. Береться **найменше** `z`, за якого дерево вміщується: `H_tree ≤ (1 − r(z) − TopMargin)·V/aspect` і `max(|x_min|, |x_max|) ≤ (0.5 − SideMargin)·V` (bounds кори + подушок без коренів, із тих самих буферів, що й меш, кеш на `Version`); `r(z) = lerp(RimFromBottomAtMinZoom, RimFromBottom, (z − ZoomMin)/(1 − ZoomMin))`, для `z ≥ 1` — `RimFromBottom`. Монотонна умова → бісекція 12 кроків, 0 B GC.
+- Дефолти: `ZoomMin` **0.78** (рішення власника 2026-10-05: горщик завжди цілий у кадрі), `ZoomMax` 1.30 (Wild H/P до 1.9), `TopMargin` 0.19 (на референсному aspect 768×1376 Styled H = 130 дає рівно z = 1), `SideMargin` 0.03, `RimFromBottomAtMinZoom` 0.30.
+- **Саджанець Д0–Д10 — рішення власника 2026-10-05: горщик завжди цілий** (`ZoomMin` 0.78; `RimFromBottomAtMinZoom` підібрати так, щоб низ горщика лишався в кадрі). Саджанець у перші дні менший у кадрі; виразність онбордингового зрізу забезпечують підсвічування гілочки й анімація, а не зум. Відхилений варіант «макро» (`z ≈ 0.60–0.65`): верх горщика і саджанець, бічні краї й низ горщика за кадром, саджанець Д0 займає ≈ 1/3 видимої висоти над бортиком, Д10 (H ≈ 72) — майже всю робочу висоту (без зуму, z = 1, — ≈ 17% і ≈ 42%). Далі кадр плавно відʼїжджає до `z ≈ 0.9–1.0` на Д40–Д80. Альтернатива для власника (§11): `ZoomMin` 0.78 — горщик завжди цілий, саджанець малий (як GDD §10.8 п.1 «тренувальний горщик»).
+- **Коли оновлюється**: лише на нову добу росту (`TreeChanged` з іншим `GrowthDayIndex`), на `Resume` після catch-up і на перемикання дерева (Алея); **ніколи** під час/одразу після зрізу чи дроту (дерево після зрізу менше — кадр не «стрибає» під секатором). Гістерезис `|Δz| ≥ 0.02`; перехід 1.2 с ease-in-out (PrimeTween), відкладається, поки палець на екрані; ручний зум гравця зберігається як множник поверх базового.
+- **Скріншот-харнеси** (IoU, `compare_momiji`, AC PA-102P) використовують **фіксований** кадр z = 1 на 768×1376 (TD-028), а не `CameraFramer`.
+
+### 6.2. Гілки — один процедурний Mesh уздовж C1-осей
+Арт-напрям L2 Painterly (`Art/Source/A_Concept/concept_day.jpg`): S-стовбур з різкою конусністю, Небарі, ярусні гілки з голими внутрішніми частинами, мальована кора з м'яким контуром.
+- `TreeRenderer` тримає **один** `Mesh` гілок (MarkDynamic) і преалоковані `NativeArray` (8 192 вершини / 12 288 трикутників, індекси `ushort`). Перебудова **лише коли змінився `TreeGraph.Version`** (ріст, зріз, дріт): `TreeShapeAnalysis` → `TreeGeometry` → вершини, `Mesh.SetVertexBufferData` без алокацій; за потреби — Burst job.
+- **Осі**: ланцюг апікальних продовжень = одна безперервна стрічка (стовбурний ланцюг + вісь крони — одна вісь; кожна бічна гілка з продовженнями — своя). Крива — центрипетальний Catmull-Rom → Безьє з узгодженими дотичними (C1, плавна S без зламів); `Curvature` додається функцією з нульовою похідною на кінцях. Кінець осі — напівкругла капа.
+- **Кріплення**: основа бічної осі — точка на кривій батька при `AttachT`, зсунута всередину батька (комір без щілини).
+- **Профіль**: `w(t) = lerp(Thickness, tipWidth, t)`, `tipWidth = max(Thickness(апікальна дитина), Thickness × 0.45)`; плавний перехід на стику.
+- **Небарі — частина цього ж мешу** (ADR-0004 rev.3 §1, BALANCE §1.3.3): розширення основи (`F` до 0.65 на Д80) + 2–7 **товстих звивистих коренів** (`NebariBuilder`, Presentation; у `TreeGeometry` не входять): кожен — 2 кубічні Безьє зі спільною дотичною (C1), вниз-назовні 35–55° → майже горизонтально → кінець під лінією `SoilFront`; товщина 0.30–0.42·th0 → 0.45 основи на лінії моху (у видимій частині не тоншає до 0), хвиля 0.15·th0 з нульовою обвідною на кінцях; кора — `_BarkTrunk` того ж матеріалу; параметри кореня *i* — від хешу `(Seed, i)` і таблиці слотів віяла за індексом (поява нового кореня не зсуває наявні).
+- **Кора в подушках, бруньки, калюс**: стрічка `InPad`-вузлів `ord ≥ 2` закінчується на 0.35·`PuffRadius` до кінчика (кінчик під листям); `Bud` — кори ≤ 1.5 units; калюс — вершинний атрибут «день зрізу» (`LastCutDay`) проти глобального `_GrowthDay`, без перебудови мешу (PA-105A).
+- **Кора**: дві мальовані безшовні текстури (`bark_trunk`, `bark_young`, 512², ASTC) в одному матеріалі; UV — `v` за довжиною дуги осі (неперервно), `u` поперек × ширину (ізотропна щільність); бленд trunk ↔ young — вершинний атрибут за шириною/порядком. Циліндричне затінення, ink-контур і AA краю — у шейдері (без MSAA). Колишні «4 яруси товщини» оригіналу — це той самий атрибут, а не 4 draw calls: усі гілки = **1 draw call**.
+- **Вітер** (Perlin, ±0.8°, період 3.5 с) і **дихання Дзен** (Y×1.015) — у vertex shader за атрибутами `flex`/`windPhase`; HLSL-include спільний із шейдером листя, тож подушки рухаються разом із гілками. CPU-вартість анімації ≈ 0.
+- Бюджет @200 вузлів: ≈ 3 000 вершин / 4 500 трикутників, ≈ 100 КБ завантаження на перебудову.
+
+### 6.3. Листя — подушки з кластерів спрайтів
+- Листя несуть лише вузли `IsLeafy` (BALANCE §1.3.4): `InPad` — останні `PadDepth` вузлів кожної осі гілки і все, що від них відходить, + верхівка молодого стовбура; внутрішні частини гілок голі.
+- **Подушка = компонента `PadId` = кластер цілих спрайтів-подушок** з атласу породи (D5 / дев-арт TA, 9 форм S/M/L із запеченим темним низом): ряди вздовж лінії регресії центрів вузлів, перекриття ×1.3, **бічна — ≤ 2 ряди (Kuromatsu — 1), купол — ≤ 3**; мала подушка (< `PadFullNodes`) — по малому спрайту на вузол; кожен кінчик `InPad` з `LeafScale ≥ 0.5` гарантовано всередині силуету (додатковий S-спрайт, якщо ряди не покрили); тінь-підкладка під подушкою в тому ж меші (ADR-0004 rev.3 §2, TD-036). До появи арту — плейсхолдер-атлас тієї ж розкладки, згенерований Editor-скриптом (TD-020).
+- Один меш листя (`FoliageMeshBuilder`, tight-меш спрайтів, преалокація 6 144 вершини) разом із бруньками, квітами, «свічками» Kuromatsu → **1 draw call**. Сортування при перебудові: подушки знизу вгору (апекс останнім), у подушці пуфи знизу вгору; Sorting Layer `Leaves` поверх гілок.
+- Нижня тінь подушки — атрибут `padLocalY` у шейдері (без окремого проходу; дефолт 0, бо низ запечено в спрайтах). Варіант спрайта, фаза вітру, підмножина Dormancy — хеш від стабільного `Id`, не від індексу.
+- Сезони (осінній/квітковий атлас + `_SeasonBlend`), Dormancy (20% пуфів, −40% насиченості), свіжий приріст, `_Wetness`, `_Droop` — **параметри матеріалу**, без перебудови мешу; приховані пуфи схлопуються у вершинному шейдері (без `discard`). Згасання — масштабом окремих пуфів, не загальною альфою шару (інакше видно перекриття).
+- Guard з оригіналу: `LeafScale < 0.02` → пуф не додається.
+- **Бюджет і ризик**: Styled Д80 ≈ 60–90 спрайтів з підкладками, Wild Д80 до ≈ 300, ≤ 3 400 вершин (преалокація 6 144); очікуваний overdraw у кроні ≈ 2.5–3.5× (було 4–5× з пуфами; **виміряти** в PA-103b). На Android mid-tier при 120 FPS — головний ризик; мітігація: tight-меш, ≤ 2 вибірки текстури, `half`, профіль `LowEnd` (без підкладки, на 1 ряд менше, render scale 0.8), `OnDemandRendering` у простої. Деталі — ADR-0004 §4.
+- Draw calls дерева: **2** (гілки + листя); сцена з горщиком, фоном і FX — 6–8 без UI.
 
 ### 6.4. Ефекти
 - **Rain sheen** (дощ/обприскування): Shader Graph для листя з параметром `_Wetness` (0..1), що згасає з часом. Fallback для слабких GPU — простий additive-highlight без шуму.
@@ -249,7 +293,7 @@ OnApplicationPause(true):
 3. `File.Replace(tmp, primary, bak)` (rename-семантика, без копіювання блоків; fallback `Copy+Delete` на `IOException`).
 4. Читання: `length > 64` → перевірка хешу → при невідповідності відновлення з `.bak` **і негайний перезапис primary** (Poison Pill guard), битий файл → `quarantine/`.
 5. Шлях: `Application.persistentDataPath`. Налаштування (звук, вібрація, місто) — `PlayerPrefs`.
-6. Схема має `schemaVersion` і мігратори.
+6. Схема має `schemaVersion` (стартова — 1: `genome`, `growth`, `nextId`, `plantedRulesVersion`, вузли з `targetLength`, `branchSide`, `attachT`, `lastCutDay`) і мігратори; `rulesVersion` — `GrowthRules.Version` збірки, що записала файл (ADR-0003 §8: сейв = стан, без реплею). `double` пишуться з побітовим round-trip. Деталі — ADR-0008 (доповнення 2a; на `develop` — rev.3 з `JsonUtility` і `double` як `long`-біти: при злитті формат чисел — за rev.3, нові цілі поля — без змін).
 
 ## 9. Конфігурація та баланс
 
@@ -302,3 +346,4 @@ OnApplicationPause(true):
 3. Геолокація: coarse-permission vs без дозволу (IP + ручне місто) (ADR-0007).
 4. Android-віджет: RemoteViews vs Glance (ADR-0007).
 5. Перегляд нереалістичних для Unity цілей: cold start < 1.2 с та аудіо < 15 мс — після спайків PA-003/PA-004.
+6. ~~Кадр саджанця~~ — **вирішено власником 2026-10-05:** `ZoomMin` 0.78, горщик завжди цілий (§6.1).
