@@ -26,6 +26,7 @@
 |---|---|---|---|---|---|
 | PA-101 | Скафолдинг Unity-проєкту: URP 2D, asmdef-шари, VContainer/R3/UniTask/PrimeTween, Input System, Force Text, Player Settings (IL2CPP, ARM64, 120 FPS, ProMotion PostProcess, Privacy Manifest), Quality профілі, стрипінг | UA | — | 3 | Done ([PA-101](PA-101.md)) |
 | PA-102 | Domain: `TreeGraph` (ADR-0003), `GrowthGrammar` з лімітом 200, Небарі (NaN-guard, експ. насичення), Фенікс, PCG32, `IClock` + EditMode-тести | GP | GD, QA | 5 | Review ([PA-102](PA-102.md)) |
+| PA-102V | Візуальний прототип росту: Play Mode сцена, гілки лініями (товщина з моделі), бруньки/листя кружечками, повзунок «день 0→120» (таймлапс), вибір породи / seed / температури. Тимчасовий debug-рендер, не замінює PA-103 | GP | GD | 2 | Review ([PA-102V](PA-102V.md)) |
 | PA-103 | `TreeRenderer`: процедурний меш гілок (Безьє-стрічки, круглі стики, 1 draw call), `LeafInstancer`, вітер у шейдері; 0 GC у кадрі | UA | TA | 5 | Backlog |
 | PA-104 | `GestureRouter` (ADR-0005): 2-пальцевий pan/zoom завжди, abort інструмента, deadzones Ingress/Egress, Slash-to-Commit, pinch window, snapping + гістерезис | GP | UA, QA | 5 | Backlog |
 | PA-105A | Секатор: зріз піддерева, калюс, падіння гілки (пул), заборона зрізу стовбура | GP | TA | 3 | Backlog |

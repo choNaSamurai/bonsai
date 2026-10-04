@@ -33,6 +33,12 @@ namespace PocketArbor.Domain.Tests
         [TestCase("PocketArbor.Infrastructure", "PocketArbor.Bootstrap")]
         [TestCase("PocketArbor.Presentation", "PocketArbor.Infrastructure")]
         [TestCase("PocketArbor.Presentation", "PocketArbor.Bootstrap")]
+        // PA-102V: editor-only dev tools must never be referenced by shipping assemblies.
+        [TestCase("PocketArbor.Domain", "PocketArbor.DevTools")]
+        [TestCase("PocketArbor.Application", "PocketArbor.DevTools")]
+        [TestCase("PocketArbor.Infrastructure", "PocketArbor.DevTools")]
+        [TestCase("PocketArbor.Presentation", "PocketArbor.DevTools")]
+        [TestCase("PocketArbor.Bootstrap", "PocketArbor.DevTools")]
         public void Layer_DoesNotReference(string assemblyName, string forbidden)
         {
             foreach (var reference in Load(assemblyName).GetReferencedAssemblies())
