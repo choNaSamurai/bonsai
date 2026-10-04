@@ -14,6 +14,7 @@ namespace PocketArbor.DevTools.GrowthPreview
     {
         static readonly string[] SpeciesNames = { "Kuromatsu", "Momiji", "Yamazakura" };
         static readonly string[] ModeNames = { "Wild", "Styled" };
+        static readonly string[] StyleNames = { "Flat", "Textured" };
         static readonly string[] ShaderCandidates =
         {
             "Universal Render Pipeline/2D/Sprite-Unlit-Default",
@@ -31,6 +32,9 @@ namespace PocketArbor.DevTools.GrowthPreview
         [SerializeField] bool _onboardingCut;
         [SerializeField, Tooltip("PA-102S: PruneToStyle on days 20/30/…/70")] bool _styled;
         [SerializeField] float _framePadding = 0.12f;
+        [SerializeField, Tooltip("PA-103S: Textured = painted bark, atlas pads, pot/soil/washi art")] bool _textured;
+        [SerializeField, Tooltip("PA-103S: realism_l2_painterly.jpg over the preview, aligned by the pot")] bool _referenceOverlay;
+        [SerializeField, Range(0f, 1f)] float _referenceAlpha = 0.5f;
 
         GrowthPreviewModel _model;
         TreePreviewMeshBuilder _builder;
@@ -42,6 +46,11 @@ namespace PocketArbor.DevTools.GrowthPreview
         int _shownCuts = -1;
         int _nodeCount;
         bool _paramsDirty = true;
+        bool _shownTextured;
+        PreviewArtLibrary _art;
+        string _artRoot = PreviewArtLibrary.DefaultRoot;
+        TexturedPreviewView _view;
+        readonly TexturedStyleConfig _style = new TexturedStyleConfig();
 
         public GrowthPreviewModel Model
         {
@@ -88,6 +97,39 @@ namespace PocketArbor.DevTools.GrowthPreview
             Refresh();
         }
 
+        public bool Textured => _textured;
+
+        /// <summary>PA-103S: Flat (PA-102S vertex colours) or Textured (painted bark, atlas pads, pot/soil/washi).</summary>
+        public void SetTextured(bool textured)
+        {
+            _textured = textured;
+            _shownDay = -1;
+            Refresh();
+        }
+
+        /// <summary>PA-103S: reference overlay (realism_l2_painterly.jpg aligned by the pot) and its alpha.</summary>
+        public void SetReferenceOverlay(bool visible, float alpha)
+        {
+            _referenceOverlay = visible;
+            _referenceAlpha = Mathf.Clamp01(alpha);
+            _view?.SetOverlay(_referenceOverlay, _referenceAlpha);
+        }
+
+        /// <summary>Re-reads the art folder (after Technical Artist adds files). Tests may point it to another folder.</summary>
+        public void ReloadArt(string root = null)
+        {
+            if (root != null) _artRoot = root;
+            _art?.Dispose();
+            _art = new PreviewArtLibrary(_artRoot);
+            _art.Load();
+            _shownDay = -1;
+            Refresh();
+        }
+
+        public PreviewArtLibrary Art => _art;
+        public TexturedPreviewView TexturedView => _view;
+        public TexturedStyleConfig Style => _style;
+
         public float TaperRatio => _builder != null ? _builder.LastTaperRatio : 0f;
         public int PadCount => _builder != null ? _builder.LastPadCount : 0;
         public TreePreviewMeshBuilder Builder => _builder;
@@ -122,14 +164,57 @@ namespace PocketArbor.DevTools.GrowthPreview
                 _paramsDirty = false;
                 _shownDay = -1;
             }
-            if (_shownDay == _day && _shownCuts == _model.CutCount) return;
+            if (_shownDay == _day && _shownCuts == _model.CutCount && _shownTextured == _textured) return;
 
             TreeGraph tree = _model.GetTree(_day);
             _nodeCount = tree.Count;
-            Bounds bounds = _builder.Build(tree, _mesh, _model.Config, _model.SpeciesConfig);
+            Bounds bounds;
+            if (_textured)
+            {
+                EnsureTextured();
+                bounds = _view.Rebuild(tree, _model, _builder, _art);
+            }
+            else bounds = _builder.Build(tree, _mesh, _model.Config, _model.SpeciesConfig);
+            GetComponent<MeshRenderer>().enabled = !_textured;
+            _view?.SetVisible(_textured);
             FrameCamera(bounds);
             _shownDay = _day;
             _shownCuts = _model.CutCount;
+            _shownTextured = _textured;
+        }
+
+        void EnsureTextured()
+        {
+            if (_art == null)
+            {
+                _art = new PreviewArtLibrary(_artRoot);
+                _art.Load();
+            }
+            if (_view == null)
+            {
+                _view = new TexturedPreviewView(transform, _style);
+                _view.SetOverlay(_referenceOverlay, _referenceAlpha);
+            }
+        }
+
+        void DisposeTextured()
+        {
+            _view?.Dispose();
+            _view = null;
+            _art?.Dispose();
+            _art = null;
+            _shownDay = -1;
+        }
+
+        /// <summary>PA-103S compare frame: camera exactly over the reference image rect (pot-aligned), no panel offset.</summary>
+        public bool FrameReference(Camera camera)
+        {
+            if (_view == null || _view.OverlayRect.width <= 0f) return false;
+            Rect r = _view.OverlayRect;
+            camera.orthographic = true;
+            camera.orthographicSize = 0.5f * r.height;
+            camera.transform.position = new Vector3(r.center.x, r.center.y, -100f);
+            return true;
         }
 
         void EnsureInitialized()
@@ -168,8 +253,14 @@ namespace PocketArbor.DevTools.GrowthPreview
             Refresh();
         }
 
+        void OnDisable()
+        {
+            DisposeTextured();
+        }
+
         void OnDestroy()
         {
+            DisposeTextured();
             DestroySafely(_mesh);
             DestroySafely(_material);
         }
@@ -257,6 +348,24 @@ namespace PocketArbor.DevTools.GrowthPreview
             {
                 _styled = mode == 1;
                 _paramsDirty = true;
+            }
+
+            GUILayout.Space(6f);
+            GUILayout.Label("Style (PA-103S)");
+            int style = GUILayout.Toolbar(_textured ? 1 : 0, StyleNames);
+            if (style != (_textured ? 1 : 0)) _textured = style == 1;
+            if (_textured)
+            {
+                bool overlay = GUILayout.Toggle(_referenceOverlay, " Reference overlay (L2 painterly)");
+                float alpha = _referenceAlpha;
+                if (overlay) alpha = LabeledSlider("Overlay alpha", _referenceAlpha, 0f, 1f, "0.00");
+                if (overlay != _referenceOverlay || !Mathf.Approximately(alpha, _referenceAlpha)) SetReferenceOverlay(overlay, alpha);
+                if (GUILayout.Button("Reload art (Art/Runtime/Preview)"))
+                {
+                    UnityEditor.AssetDatabase.Refresh();
+                    ReloadArt();
+                }
+                if (_art != null) GUILayout.Label("Art: " + _art.Summary);
             }
 
             GUILayout.Space(6f);

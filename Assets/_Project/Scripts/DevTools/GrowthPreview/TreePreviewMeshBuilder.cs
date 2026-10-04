@@ -15,7 +15,7 @@ namespace PocketArbor.DevTools.GrowthPreview
     /// World: 1 unit = 1 biological unit, soil / Pot Lip at y = 0 (Unity Y-up), positive angle = counter-clockwise.
     /// One mesh, vertex colours, drawn in append order. Dev-only: allocations are fine.
     /// </summary>
-    public sealed class TreePreviewMeshBuilder
+    public sealed partial class TreePreviewMeshBuilder
     {
         const int SegmentSamples = 12;
         const int DiscSegments = 18;
@@ -89,31 +89,15 @@ namespace PocketArbor.DevTools.GrowthPreview
             _vertices.Clear();
             _colors.Clear();
             _indices.Clear();
-            _linear = QualitySettings.activeColorSpace == ColorSpace.Linear;
-
-            ReadOnlySpan<NodeData> span = tree.Nodes;
-            _count = span.Length;
-            span.CopyTo(_nodes);
-            _shape.Analyze(span, growth.TrunkChainSegments, species.PadDepth);
-            LastPadCount = _shape.PadCount;
-
-            _th0 = (float)_nodes[0].Thickness;
-            float flareRange = (float)(growth.MaxThickness - growth.TrunkInitialThickness);
-            _flare = _render.NebariFlareMin + _render.NebariFlareGain
-                * Mathf.Clamp01(flareRange > 0f ? (_th0 - (float)growth.TrunkInitialThickness) / flareRange : 0f);
-
-            ComputeGeometry();
-            FoliageConfig foliage = FoliageConfig.For(tree.Genome.Species);
-            Rect treeRect = TreeExtents(foliage);
+            FoliageConfig foliage = Prepare(tree, growth, species);
+            float potWidth = LastPotWidth;
 
             // Pot first (everything else overdraws it), sized to the crown.
-            float potWidth = Mathf.Clamp(treeRect.width * 0.62f, 60f, 170f);
             float potHeight = potWidth * 0.26f;
             AddRect(new Vector2(-potWidth * 0.5f, -potHeight), new Vector2(potWidth * 0.5f, 0f), Pot);
             AddRect(new Vector2(-potWidth * 0.5f - PotLipOverhang, -PotLipThickness * 2f), new Vector2(potWidth * 0.5f + PotLipOverhang, 0f), PotLip);
             AddRect(new Vector2(-potWidth * 0.5f + 1.5f, -0.6f), new Vector2(potWidth * 0.5f - 1.5f, 1.2f), Soil);
 
-            LastPotWidth = potWidth;
             AddNebariRoots(tree.Genome.Seed, growth);
             int treeStart = _vertices.Count;
             _trunkSamples.Clear();
@@ -146,6 +130,29 @@ namespace PocketArbor.DevTools.GrowthPreview
             mesh.SetColors(_colors);
             mesh.SetTriangles(_indices, 0, true);
             return mesh.bounds;
+        }
+
+        /// <summary>Shared by the Flat and Textured outputs: shape analysis, axis geometry, Nebari flare and the preview pot width.</summary>
+        FoliageConfig Prepare(TreeGraph tree, GrowthConfig growth, SpeciesConfig species)
+        {
+            _linear = QualitySettings.activeColorSpace == ColorSpace.Linear;
+
+            ReadOnlySpan<NodeData> span = tree.Nodes;
+            _count = span.Length;
+            span.CopyTo(_nodes);
+            _shape.Analyze(span, growth.TrunkChainSegments, species.PadDepth);
+            LastPadCount = _shape.PadCount;
+
+            _th0 = (float)_nodes[0].Thickness;
+            float flareRange = (float)(growth.MaxThickness - growth.TrunkInitialThickness);
+            _flare = _render.NebariFlareMin + _render.NebariFlareGain
+                * Mathf.Clamp01(flareRange > 0f ? (_th0 - (float)growth.TrunkInitialThickness) / flareRange : 0f);
+
+            ComputeGeometry();
+            FoliageConfig foliage = FoliageConfig.For(tree.Genome.Species);
+            Rect treeRect = TreeExtents(foliage);
+            LastPotWidth = Mathf.Clamp(treeRect.width * 0.62f, 60f, 170f);
+            return foliage;
         }
 
         // ---- Geometry ---------------------------------------------------------------------------------
@@ -290,29 +297,38 @@ namespace PocketArbor.DevTools.GrowthPreview
 
         void AddNebariRoots(uint seed, GrowthConfig growth)
         {
-            float th0 = _th0;
-            int count = Mathf.Clamp(Mathf.RoundToInt(_render.NebariRootsMin + (th0 - (float)growth.TrunkInitialThickness) / _render.NebariThicknessPerRoot),
-                _render.NebariRootsMin, _render.NebariRootsMax);
-            int trunkId = _nodes[0].Id;
+            int count = NebariRootCount(growth);
             for (int r = 0; r < count; r++)
             {
-                float frac = count == 1 ? 0.5f : r / (float)(count - 1);
-                float angle = Mathf.Lerp(-_render.NebariFanDeg, _render.NebariFanDeg, frac)
-                    + _render.NebariFanJitterDeg * (2f * Hash01(seed, trunkId, 101u + (uint)r) - 1f);
-                float h = Hash01(seed, trunkId, 211u + (uint)r);
-                float lengthFactor = (r & 1) == 0
-                    ? Mathf.Lerp(_render.NebariRootLengthMin, _render.NebariRootLengthMax, 0.6f + 0.4f * h)
-                    : Mathf.Lerp(_render.NebariRootLengthMin, _render.NebariRootLengthMax, 0.4f * h);
-                float length = th0 * lengthFactor;
-                float thickness = _render.NebariRootThicknessRatio * th0;
-                float sin = Mathf.Sin(angle * Mathf.Deg2Rad);
-
-                // Roots leave the flared base above the soil and arch down onto it (Y ∈ [soil, soil + 0.35·th0]).
-                Vector2 start = new Vector2(sin * th0 * 0.45f, thickness * 1.1f);
-                Vector2 end = new Vector2(start.x + sin * length, -0.3f);
-                Vector2 control = new Vector2(Mathf.Lerp(start.x, end.x, 0.25f), thickness * 0.75f);
+                NebariRoot(seed, r, count, out Vector2 start, out Vector2 control, out Vector2 end, out float thickness);
                 AddTaperedQuadratic(start, control, end, thickness, Bark, BarkDark);
             }
+        }
+
+        int NebariRootCount(GrowthConfig growth) =>
+            Mathf.Clamp(Mathf.RoundToInt(_render.NebariRootsMin + (_th0 - (float)growth.TrunkInitialThickness) / _render.NebariThicknessPerRoot),
+                _render.NebariRootsMin, _render.NebariRootsMax);
+
+        /// <summary>Root r of <paramref name="count"/>: quadratic Bezier (start on the flared base → end on the soil) and base thickness.</summary>
+        void NebariRoot(uint seed, int r, int count, out Vector2 start, out Vector2 control, out Vector2 end, out float thickness)
+        {
+            float th0 = _th0;
+            int trunkId = _nodes[0].Id;
+            float frac = count == 1 ? 0.5f : r / (float)(count - 1);
+            float angle = Mathf.Lerp(-_render.NebariFanDeg, _render.NebariFanDeg, frac)
+                + _render.NebariFanJitterDeg * (2f * Hash01(seed, trunkId, 101u + (uint)r) - 1f);
+            float h = Hash01(seed, trunkId, 211u + (uint)r);
+            float lengthFactor = (r & 1) == 0
+                ? Mathf.Lerp(_render.NebariRootLengthMin, _render.NebariRootLengthMax, 0.6f + 0.4f * h)
+                : Mathf.Lerp(_render.NebariRootLengthMin, _render.NebariRootLengthMax, 0.4f * h);
+            float length = th0 * lengthFactor;
+            thickness = _render.NebariRootThicknessRatio * th0;
+            float sin = Mathf.Sin(angle * Mathf.Deg2Rad);
+
+            // Roots leave the flared base above the soil and arch down onto it (Y ∈ [soil, soil + 0.35·th0]).
+            start = new Vector2(sin * th0 * 0.45f, thickness * 1.1f);
+            end = new Vector2(start.x + sin * length, -0.3f);
+            control = new Vector2(Mathf.Lerp(start.x, end.x, 0.25f), thickness * 0.75f);
         }
 
         void AddTaperedQuadratic(Vector2 a, Vector2 c, Vector2 b, float startWidth, Color32 top, Color32 bottom)

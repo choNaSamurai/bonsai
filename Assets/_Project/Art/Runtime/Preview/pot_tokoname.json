@@ -1,0 +1,12 @@
+{
+  "lipY": 270,
+  "innerLeft": 80,
+  "innerRight": 1074,
+  "innerTopY": 420,
+  "innerTopLeft": 176,
+  "innerTopRight": 1004,
+  "rimBackTopY": 450,
+  "width": 1158,
+  "height": 454,
+  "note": "y values are pixels from the bottom edge; x from the left edge. Opening (alpha=0 hole) is the quad innerLeft/innerRight at lipY .. innerTopLeft/innerTopRight at innerTopY; soil sprite goes BEHIND the pot."
+}

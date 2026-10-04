@@ -55,7 +55,11 @@ namespace PocketArbor.DevTools.GrowthPreview
                 string[] args = Environment.GetCommandLineArgs();
                 if (Array.IndexOf(args, "-createScene") >= 0) CreateScene();
                 string outDir = ArgValue(args, "-captureOut");
-                if (!string.IsNullOrEmpty(outDir)) Capture(outDir, new[] { 10, 20, 40, 80 }, 1024);
+                if (!string.IsNullOrEmpty(outDir))
+                {
+                    if (Array.IndexOf(args, "-textured") >= 0) CaptureTextured(outDir, new[] { 40, 80 }, 1024);
+                    else Capture(outDir, new[] { 10, 20, 40, 80 }, 1024);
+                }
             }
             catch (Exception e)
             {
@@ -113,6 +117,95 @@ namespace PocketArbor.DevTools.GrowthPreview
                 camera.targetTexture = null;
                 UnityEngine.Object.DestroyImmediate(rt);
                 UnityEngine.Object.DestroyImmediate(readback);
+            }
+        }
+
+        /// <summary>
+        /// PA-103S: Textured × Styled × 3 species × <paramref name="days"/> (square PNGs, no MSAA — edge AA is the shader's),
+        /// plus Momiji Styled D80 framed exactly like the reference (pot-aligned) next to realism_l2_painterly.jpg:
+        /// compare_momiji.png (side by side, same height) and compare_momiji_overlay.png (reference over the preview at 50%).
+        /// </summary>
+        public static void CaptureTextured(string outDir, int[] days, int size)
+        {
+            Directory.CreateDirectory(outDir);
+            EditorSceneManager.OpenScene(ScenePath, OpenSceneMode.Single);
+            var controller = UnityEngine.Object.FindFirstObjectByType<GrowthPreviewController>();
+            if (controller == null) throw new InvalidOperationException("GrowthPreviewController not found in " + ScenePath);
+            Camera camera = controller.TargetCamera != null ? controller.TargetCamera : Camera.main;
+            controller.SetStyled(true);
+            controller.SetTextured(true);
+            controller.ReloadArt();
+            Debug.Log("[GrowthPreview] art: " + controller.Art.Summary);
+            File.WriteAllText(Path.Combine(outDir, "art_status.txt"), controller.Art.Summary + "\n");
+
+            foreach (SpeciesId species in new[] { SpeciesId.Kuromatsu, SpeciesId.Momiji, SpeciesId.Yamazakura })
+            {
+                controller.SetSpecies(species);
+                foreach (int day in days)
+                {
+                    controller.SetDay(day);
+                    string file = Path.Combine(outDir, species + "_styled_textured_day" + day.ToString("000") + "_n" + controller.NodeCount + ".png");
+                    File.WriteAllBytes(file, RenderToPng(camera, size, size, null));
+                    Debug.Log("[GrowthPreview] captured " + file);
+                }
+            }
+
+            // Compare frame: Momiji Styled D80, camera over the pot-aligned reference rect.
+            controller.SetSpecies(SpeciesId.Momiji);
+            controller.SetDay(80);
+            Texture2D reference = controller.Art.Reference;
+            if (reference == null)
+            {
+                Debug.LogWarning("[GrowthPreview] reference jpg not found: " + PreviewArtLibrary.ReferencePath);
+                return;
+            }
+            int w = reference.width, h = reference.height;
+            controller.SetReferenceOverlay(false, 0.5f);
+            if (!controller.FrameReference(camera)) throw new InvalidOperationException("reference frame unavailable");
+            var ours = new Texture2D(w, h, TextureFormat.RGBA32, false);
+            try
+            {
+                RenderToPng(camera, w, h, ours);
+                var sideBySide = new Texture2D(w * 2, h, TextureFormat.RGBA32, false);
+                sideBySide.SetPixels32(0, 0, w, h, ours.GetPixels32());
+                sideBySide.SetPixels32(w, 0, w, h, reference.GetPixels32());
+                sideBySide.Apply();
+                File.WriteAllBytes(Path.Combine(outDir, "compare_momiji.png"), sideBySide.EncodeToPNG());
+                UnityEngine.Object.DestroyImmediate(sideBySide);
+
+                controller.SetReferenceOverlay(true, 0.5f);
+                controller.FrameReference(camera);
+                File.WriteAllBytes(Path.Combine(outDir, "compare_momiji_overlay.png"), RenderToPng(camera, w, h, null));
+                controller.SetReferenceOverlay(false, 0.5f);
+                Debug.Log("[GrowthPreview] captured compare_momiji.png");
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(ours);
+            }
+        }
+
+        /// <summary>Renders <paramref name="camera"/> into a w×h sRGB target (no MSAA); returns PNG bytes, optionally keeps pixels.</summary>
+        static byte[] RenderToPng(Camera camera, int width, int height, Texture2D keep)
+        {
+            var rt = new RenderTexture(width, height, 24, RenderTextureFormat.ARGB32, RenderTextureReadWrite.sRGB) { antiAliasing = 1 };
+            Texture2D readback = keep != null ? keep : new Texture2D(width, height, TextureFormat.RGBA32, false);
+            RenderTexture previous = RenderTexture.active;
+            try
+            {
+                camera.targetTexture = rt;
+                camera.Render();
+                RenderTexture.active = rt;
+                readback.ReadPixels(new Rect(0, 0, width, height), 0, 0);
+                readback.Apply();
+                return readback.EncodeToPNG();
+            }
+            finally
+            {
+                RenderTexture.active = previous;
+                camera.targetTexture = null;
+                UnityEngine.Object.DestroyImmediate(rt);
+                if (keep == null) UnityEngine.Object.DestroyImmediate(readback);
             }
         }
 
