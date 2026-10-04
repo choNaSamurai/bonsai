@@ -20,7 +20,7 @@ model: opus
 - Рендер — 1 draw call гілки + 1 draw call листя; меш перебудовується лише при зміні `Version`; анімації — у шейдері.
 - **0 B GC у steady-state кадрі**: без LINQ, лямбд-замикань, `foreach` по інтерфейсах, конкатенації рядків, `GetComponent` в Update; преалоковані буфери, `NativeArray`, пули.
 - Платформи: побічні ефекти (хаптика, звук, віджет) — тільки в Presentation/Infrastructure через порти.
-- Розмір: IL2CPP, High stripping + `link.xml`, мінімум модулів; бюджет: Android Play download arm64 ≤ 25 МБ (межа 30), iOS App Store download ≤ 35 МБ / install ≤ 55 МБ (ARCHITECTURE §10); OptimizeSize, C++ Release.
+- Розмір: IL2CPP, High stripping + `link.xml`, мінімум модулів; бюджет: Android Play download arm64 ≤ 28 МБ (межа 30), iOS App Store download ≤ 45 МБ / install ≤ 60 МБ (ARCHITECTURE §10; переглядаються після вертикального зрізу); OptimizeSize, C++ Release, R8, URP-стрипінг; без Unity Localization і прямого Newtonsoft (TD-026), новий пакет — лише з виміром дельти розміру.
 
 ## Як працюєш
 - Значуще рішення → новий ADR (копія `docs/adr/0000-template.md`, статус `Proposed`) + рядок в індексі `docs/adr/README.md`. Статус `Accepted` ставить оркестратор після погодження власника.

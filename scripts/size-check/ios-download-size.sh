@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Measures an unsigned iOS .xcarchive: .app install size, zip lower bound and encrypted-__TEXT upper bound of App Store download.
-# Usage: scripts/size-check/ios-download-size.sh <path/to/App.xcarchive>  (budget: download <= 35 MB, install <= 55 MB)
+# Usage: scripts/size-check/ios-download-size.sh <path/to/App.xcarchive>  (budget: download <= 45 MB, install <= 60 MB)
 A=$1; APP=$(ls -d "$A"/Products/Applications/*.app)
 echo "app_bytes $(du -sk "$APP" | cut -f1) KiB (du)"; 
 echo "app_apparent $(find "$APP" -type f -exec stat -f %z {} + | awk '{s+=$1} END{print s}') bytes"

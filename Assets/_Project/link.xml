@@ -1,26 +1,19 @@
 <!--
   Managed Stripping = High (ADR-0001, ARCHITECTURE §10). Preserve only what is reached via reflection.
-  Narrow these entries after the size spike PA-003 (BuildReport) shows their real cost.
+  Narrowed in PA-101b after PA-003b measurements (TD-011): R3 / R3.Unity / UniTask are NOT preserved -
+  they are reached through static references (no reflection on our side), UnityLinker keeps what is used;
+  preserve="all" for them cost ~1.4 MB Play download.
+  Newtonsoft.Json is not used by our code (ADR-0008 rev.3: JsonUtility), so it is not listed here;
+  Unity IAP 5 still brings it transitively and carries its own link rules.
 -->
 <linker>
-  <!-- Our assemblies: VContainer constructs types reflectively; Newtonsoft (de)serializes save DTOs. -->
+  <!-- Our assemblies: VContainer resolves constructors/[Inject] members reflectively; JsonUtility DTOs live here. -->
   <assembly fullname="PocketArbor.Domain" preserve="all"/>
   <assembly fullname="PocketArbor.Application" preserve="all"/>
   <assembly fullname="PocketArbor.Infrastructure" preserve="all"/>
   <assembly fullname="PocketArbor.Presentation" preserve="all"/>
   <assembly fullname="PocketArbor.Bootstrap" preserve="all"/>
 
-  <!-- DI: reflection-based injector (no source generator yet). -->
+  <!-- DI: reflection-based injector (no source generator yet). Costs ~0.03 MB download, kept as a safety net. -->
   <assembly fullname="VContainer" preserve="all"/>
-
-  <!-- Reactive / async: generic instantiations reached through PlayerLoop injection. -->
-  <assembly fullname="R3" preserve="all"/>
-  <assembly fullname="R3.Unity" preserve="all"/>
-  <assembly fullname="UniTask" preserve="all"/>
-
-  <!-- Newtonsoft.Json: keep converters and contract resolution; the rest may be stripped. -->
-  <assembly fullname="Newtonsoft.Json">
-    <type fullname="Newtonsoft.Json.Converters.*" preserve="all"/>
-    <type fullname="Newtonsoft.Json.Serialization.*" preserve="all"/>
-  </assembly>
 </linker>

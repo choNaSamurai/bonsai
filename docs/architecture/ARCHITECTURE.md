@@ -3,6 +3,7 @@
 > Власник: **Unity Architect** · Статус: **Draft v0.2** (очікує погодження) · 2026-10-04 (PA-101: фактичні версії пакетів, структура Assets)
 > Джерело вимог: [`reference/flutter-v3.2/`](../reference/flutter-v3.2/) — ТЗ, архітектура і дизайн-система, написані під Flutter. Цей документ **замінює** Flutter-специфічні частини; рушій-незалежні вимоги (математика росту, ґрунт, онбординг, комплаєнс) переходять у [GDD](../gdd/GDD.md) і [BALANCE](../gdd/BALANCE.md) без змін.
 > Ключові рішення оформлені як ADR у [`docs/adr/`](../adr/).
+> Оновлення 2026-10-05 (PA-101b): бюджети розміру — варіант C (§1, §10), стек без Unity Localization і прямого Newtonsoft (§2, §2.1, §8), білінг — ADR-0009.
 
 ---
 
@@ -13,11 +14,11 @@
 | Платформи | iOS 16+, Android 10+ (API 29); Web — пріоритет 2 | Unity Web (WebGL2/WebGPU) — після MVP |
 | Частота кадрів | 120 FPS на ProMotion під час взаємодії, 60 FPS базово | В режимі споглядання — адаптивне зниження (див. §6.5) |
 | GC у кадрі | 0 B алокацій у steady-state | Перевіряється Performance-тестами (`GC.Alloc` recorder) |
-| Розмір | Android: Play download arm64 ≤ 25 МБ (жорстка межа 30); iOS: App Store download ≤ 35 МБ, install ≤ 55 МБ | Перевизначено власником 2026-10-04 після Spike PA-003: бюджети ТЗ (.ipa < 25 / .aab < 20) недосяжні для Unity + URP — порожній проєкт уже 18.2 МБ (Android) / ~30 МБ (iOS download). Звіт: [PA-003](../qa/reports/PA-003-2026-10-04.md) |
+| Розмір | Android: Play download arm64 ≤ 28 МБ (жорстка межа 30); iOS: App Store download ≤ 45 МБ, install ≤ 60 МБ | Рішення власника 2026-10-05 (варіант C) після [PA-003b](../qa/reports/PA-003b-2026-10-05.md): зі стеком Unity IAP 5 бюджети 25 / 35 / 55 недосяжні навіть на скафолді. **Переглядаються після вертикального зрізу**, якщо контент вимагатиме. Історія: ТЗ .ipa < 25 / .aab < 20 → 2026-10-04 (PA-003) 25 (30) / 35 / 55 → 2026-10-05 28 (30) / 45 / 60. Деталі — §10 |
 | Холодний старт | < 1.2 с (Flutter-ціль) | **Ризик**: для Unity реалістично 1.5–2.5 с на mid-tier. Ціль перевизначається після Spike PA-003 |
 | Аудіо-латентність | < 15 мс (Flutter-ціль) | **Ризик**: Unity на Android дає ~20–40 мс. Spike PA-004 вимірює і, за потреби, переходимо на native-audio плагін |
 
-## 2. Технологічний стек (пропозиція → ADR-0001…0008)
+## 2. Технологічний стек (пропозиція → ADR-0001…0009)
 
 | Підсистема | Flutter (оригінал) | Unity (пропозиція) | ADR |
 |---|---|---|---|
@@ -37,21 +38,21 @@
 | Хаптика | HapticFeedback | Native-плагін (iOS `UIImpactFeedbackGenerator`, Android `VibrationEffect`) | [0007](../adr/0007-native-platform-layer.md) |
 | Віджети ОС | `home_widget` | iOS **WidgetKit extension** (PostProcessBuild), Android **AppWidgetProvider (RemoteViews)** в `.androidlib` | [0007](../adr/0007-native-platform-layer.md) |
 | Сховище | атомарний JSON + shared_preferences | **AtomicFileStore** (C#: tmp → bak → rename, SHA-256 envelope) + `PlayerPrefs` для пласких налаштувань | [0008](../adr/0008-persistence.md) |
-| Серіалізація | dart:convert | `com.unity.nuget.newtonsoft-json` | [0008](../adr/0008-persistence.md) |
+| Серіалізація | dart:convert | **`UnityEngine.JsonUtility`** + DTO в Infrastructure (без Newtonsoft — ADR-0008 rev.3) | [0008](../adr/0008-persistence.md) |
 | Погода | dio + Open-Meteo | `UnityWebRequest` + Open-Meteo | — |
 | Геолокація | geolocator (coarse) | `Input.location` (accuracy 5 км) + маніфест-патч COARSE-only, або IP/ручне місто | [0007](../adr/0007-native-platform-layer.md) |
-| IAP | in_app_purchase | **Unity IAP 5** (`com.unity.purchasing`, StoreKit 2) | — |
+| IAP | in_app_purchase | **Unity IAP 5** (`com.unity.purchasing`, StoreKit 2) за портом `IPurchaseService`; власний плагін — опція v1.1 | [0009](../adr/0009-billing-unity-iap.md) |
 | Нотифікації | flutter_local_notifications | `com.unity.mobile.notifications` | — |
 | Шеринг | share_plus | NativeShare (yasirkula, MIT) | — |
 | QR | qr_flutter | ZXing.Net (Apache-2.0) | — |
 | Deep links | app_links | `Application.deepLinkActivated` + Universal/App Links | — |
 | Wakelock | wakelock_plus | `Screen.sleepTimeout = SleepTimeout.NeverSleep` | — |
-| Локалізація | intl | `com.unity.localization` (en, ja; uk — v1.1) | — |
+| Локалізація | intl | **Власні таблиці рядків** (ScriptableObject, int-ключі, TMP fallback-шрифти); без `com.unity.localization`/Addressables (en, ja; uk — v1.1) | [0006](../adr/0006-ui-ugui-canvas.md) |
 | Тести | flutter_test, golden_toolkit | **Unity Test Framework** (EditMode/PlayMode), `com.unity.test-framework.performance`, скриншот-порівняння | [QA strategy](../qa/TEST_STRATEGY.md) |
 
-### 2.1. Фактичні версії пакетів (PA-101, Unity 6000.6.4f1)
+### 2.1. Фактичні версії пакетів (PA-101, оновлено PA-101b; Unity 6000.6.4f1)
 
-Джерело правди — `Packages/manifest.json` + `Packages/packages-lock.json`; обґрунтування — TD-005…TD-007.
+Джерело правди — `Packages/manifest.json` + `Packages/packages-lock.json`; обґрунтування — TD-005…TD-007, TD-026.
 
 | Пакет | Версія | Джерело |
 |---|---|---|
@@ -60,16 +61,16 @@
 | `com.unity.ugui` (uGUI + TextMeshPro) | 2.6.0 | вбудований |
 | `com.unity.2d.sprite` | 1.0.0 | вбудований |
 | `com.unity.test-framework` / `.performance` | 1.8.0 / 6.6.0 | вбудований |
-| `com.unity.nuget.newtonsoft-json` | 3.2.2 | Unity |
-| `com.unity.localization` (→ addressables 2.11.2) | 1.5.13 | Unity |
 | `com.unity.mobile.notifications` | 2.5.0 | Unity |
-| `com.unity.purchasing` (IAP 5, StoreKit 2) | 5.4.4 | Unity registry |
+| `com.unity.purchasing` (IAP 5, StoreKit 2; транзитивно → `com.unity.services.core`, `com.unity.nuget.newtonsoft-json` 3.2.2) | 5.4.4 | Unity registry |
 | `jp.hadashikick.vcontainer` | 1.19.0 | OpenUPM |
 | `com.cysharp.r3` (R3.Unity) + `org.nuget.r3` (ядро) | 1.3.1 | OpenUPM + UnityNuGet (TD-006) |
 | `com.cysharp.unitask` | 2.5.11 | OpenUPM |
 | `com.kyrylokuzyk.primetween` | 1.3.3 | OpenUPM |
 
-Модулі в manifest: `androidjni, audio, imageconversion, imgui, jsonserialize, particlesystem, physics2d, ui, unitywebrequest`. Залежностями додатково підтягуються `physics` (від uGUI), `physicscore2d`, `animation`, `uielements`, `hierarchycore`, `assetbundle`, `unitywebrequestassetbundle`. Відсутні: terrain, cloth, vehicles, ai, video, wind, vr/xr, umbra, director/timeline, unityanalytics.
+Прибрано в PA-101b: `com.unity.localization` (+ `com.unity.addressables`, `scriptablebuildpipeline`) і пряма залежність `com.unity.nuget.newtonsoft-json` (лишається транзитивно через IAP 5 — **наш код Newtonsoft не використовує**, ADR-0008 rev.3). Новий пакет, що тягне Newtonsoft/Addressables, — лише після замірів розміру (TD-026).
+
+Модулі в manifest: `androidjni, audio, imageconversion, imgui, jsonserialize, particlesystem, physics2d, ui, unitywebrequest`. Залежностями додатково підтягуються `physics` (від uGUI), `physicscore2d`, `animation`, `uielements`, `hierarchycore` (`assetbundle`, `unitywebrequestassetbundle` зникли разом з Addressables). Відсутні: terrain, cloth, vehicles, ai, video, wind, vr/xr, umbra, director/timeline, unityanalytics.
 
 > **Пастка імен**: namespace `PocketArbor.Application` затіняє `UnityEngine.Application` — у коді `PocketArbor.*` пишемо `UnityEngine.Application.xxx` (TD-008).
 
@@ -243,7 +244,7 @@ OnApplicationPause(true):
 ## 8. Збереження (→ ADR-0008)
 
 `AtomicFileStore` (Infrastructure) переносить алгоритм оригіналу 1:1:
-1. JSON (Newtonsoft) → UTF-8 → SHA-256 → envelope `[64 hex][json]`.
+1. DTO (`[Serializable]`, поля) → `JsonUtility.ToJson` → UTF-8 → SHA-256 → envelope `[64 hex][json]`. Правила DTO — ADR-0008 rev.3: `double` лише як `long`-біти, non-finite відхиляються, обов'язкові поля валідуються явно.
 2. `FileStream` → `tree_state.json.tmp`, `Flush(flushToDisk: true)`.
 3. `File.Replace(tmp, primary, bak)` (rename-семантика, без копіювання блоків; fallback `Copy+Delete` на `IOException`).
 4. Читання: `length > 64` → перевірка хешу → при невідповідності відновлення з `.bak` **і негайний перезапис primary** (Poison Pill guard), битий файл → `quarantine/`.
@@ -256,30 +257,43 @@ OnApplicationPause(true):
 
 ## 10. Збірка і розмір (Asset Diet)
 
-**Бюджети (власник, 2026-10-04):**
+**Бюджети (власник, 2026-10-05, варіант C; переглядаються після вертикального зрізу):**
 
 | Платформа | Метрика | Ціль | Жорстка межа | Як міряти |
 |---|---|---|---|---|
-| Android | Play download size, arm64 | ≤ 25 МБ | 30 МБ | `bundletool build-apks` + `get-size total --device-spec arm64` |
-| iOS | App Store download size | ≤ 35 МБ | — | App Store Connect / Xcode App Thinning Size Report |
-| iOS | Install size | ≤ 55 МБ | — | розмір `.app` |
+| Android | Play download size, arm64 | ≤ 28 МБ | 30 МБ | `scripts/size-check/android-download-size.sh` (`bundletool get-size total --device-spec arm64`) |
+| iOS | App Store download size | ≤ 45 МБ | — | App Store Connect / App Thinning Size Report; до підпису — `scripts/size-check/ios-download-size.sh` (оцінка) |
+| iOS | Install size | ≤ 60 МБ | — | розмір `.app` |
 | Шрифт | ZenMaru субсет | < 450 КБ | — | без змін з ТЗ |
 | Аудіо | усі кліпи | < 1.4 МБ | — | без змін з ТЗ |
 
-Baseline порожнього URP-2D проєкту (PA-003): Android 18.2 МБ download, iOS ~30 МБ download / 40 МБ install. 88% — код рушія (`libunity` + `libil2cpp`).
+**Baseline** (МБ = 10^6 байт; SizeProbe — мінімальне використання кожного пакета, див. [PA-003b](../qa/reports/PA-003b-2026-10-05.md)):
 
-**Обов'язкові налаштування збірки** (виміряний ефект на Android download):
+| Стан | Android download | iOS `.app` (install) | iOS download (оцінка / верхня межа) |
+|---|---:|---:|---:|
+| Порожній URP 2D, tuned (PA-003) | 18.2 | 40.0 | ~30 / 31.5 |
+| PA-101 як є (PA-003b V0) | 37.65 | 92.0 | ~73 / 76.9 |
+| **PA-101b (поточний репо)** | **25.06** | **55.95** | **~43.1 / 45.55** |
+| Прогноз продукту: + шрифт, аудіо, арт, ігровий код (+2.9…4.4) | 28.0–29.5 | ~59–60.5 | ~46–47.5 |
+
+Запас до бюджету на скафолді: Android 2.9 МБ (до межі 30 — 4.9), iOS install 4.0, iOS download ~1.9 (точкова оцінка). Прогноз продукту впирається в Android-ціль 28 і iOS download 45 — бюджети переглядаються після вертикального зрізу; великий резервний важіль — ADR-0009 (власний білінг-плагін: −5.6 МБ Android / ~−12 МБ iOS install), малі — GLES3-only (−0.36 Android), Activity замість GameActivity (−0.4…0.5).
+88% Android download — код рушія і BCL (`libunity` 8.8 + `libil2cpp` 10.2 + metadata 2.6).
+
+**Обов'язкові налаштування збірки** (виставляє `Assets/_Project/Editor/ProjectSetup.cs`, ідемпотентно, TD-025; ефект — Android download, PA-003/PA-003b):
 - IL2CPP, ARM64 only; Managed Stripping = **High** (+ `link.xml`) — без нього +2.9 МБ; **Strip Engine Code** — без нього +4.9 МБ.
-- IL2CPP Code Generation = **OptimizeSize** (OptimizeSpeed: +3.7 МБ); C++ Compiler Configuration = **Release** (Master/LTO: +1.3 МБ).
-- URP Global Settings: strip unused post-processing / 2D / runtime-debug variants (−1.3 МБ).
-- Graphics API Android: Vulkan + GLES3 (GLES3-only заощадив би 0.9 МБ — відкрите рішення, §11). Application Entry: GameActivity (Activity: −0.5 МБ, не беремо).
+- IL2CPP Code Generation = **OptimizeSize** (OptimizeSpeed: +5.9 МБ); C++ Compiler Configuration = **Release** явно (Master/LTO: +1.3 МБ) — iOS і Android.
+- Android **R8** (`minifyRelease = true`, debug — без minify): −2.6 МБ. Keep-правила для нашого JNI-коду — `Assets/Plugins/Android/proguard-user.txt` (Custom Proguard File), коли такий код з'явиться (ADR-0007).
+- URP Global Settings (`Assets/_Project/Settings/Rendering/UniversalRenderPipelineGlobalSettings.asset`): Strip Unused Post Processing Variants **and Resources**, Strip Unused 2D Variants (за аналізом сцен білда), Strip Unused Variants, Strip Screen Coord Override, Strip Runtime Debug Shaders — −1.8 МБ. **Наслідок**: 2D-світло типу, якого немає в жодній сцені білда (напр. Point Light 2D, створене лише з коду), втратить варіанти шейдерів — такі світла мають бути присутні в сцені/префабі сцени (вимкненими).
+- `link.xml` — лише `PocketArbor.*` і VContainer (`preserve="all"`); R3/UniTask/Newtonsoft не зберігаються (TD-011, −1.47 МБ).
+- Unity Splash вимкнено (Unity 6 дозволяє на Personal): −1.27 МБ iOS `.app` (логотип у `globalgamemanagers.assets.resS`), ≤ 0.1 Android, і швидший перший кадр.
+- Graphics API Android: Vulkan + GLES3 (GLES3-only: −0.36 МБ — резервний важіль). Application Entry: GameActivity (Activity: −0.4…0.5 МБ, не беремо).
+- Пакети: без Unity Localization/Addressables (власні таблиці рядків, ADR-0006), без прямого Newtonsoft (ADR-0008 rev.3). Кожен новий пакет — з виміром дельти (повтор SizeProbe) і рядком у TECH_DECISIONS.
 - Не форкати URP заради вирізання UIElements (найбільший шматок коду).
 - Видалити з `manifest.json` невикористані модулі (`com.unity.modules.*`: physics 3D, terrain, vehicles, video, AI, cloth, …).
 - Шрифт: ZenMaru Gothic subset → **static** TMP SDF-атлас (Alpha8) з фіксованим charset; dynamic fallback лише для UGC-поля.
 - Аудіо: Vorbis/ADPCM mono, `Load Type` = Decompress On Load для коротких SFX, Streaming для ембієнту; бюджет < 1.4 МБ.
 - Текстури: ASTC (iOS/Android), спрайт-атласи.
-- Перевірка бюджету — Editor-скрипт після білда (`BuildReport`) + `bundletool get-size` з порогом; у CI пізніше. Скрипти вимірювання — у звіті PA-003 §9.
-- Внесок VContainer / R3 / UniTask / PrimeTween / Localization+Addressables / Newtonsoft ще не виміряно — повторити PA-003 на проєкті PA-101.
+- Перевірка бюджету — Editor-скрипт після білда (`BuildReport`) + `bundletool get-size` з порогом (ціль 28 → warning, межа 30 → fail); у CI пізніше. Скрипти — `scripts/size-check/`, методика — звіт PA-003b §9.
 
 ## 11. Відкриті питання (потребують рішення власника)
 

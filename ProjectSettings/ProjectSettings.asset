@@ -17,8 +17,8 @@ PlayerSettings:
   defaultCursor: {fileID: 0}
   cursorHotspot: {x: 0, y: 0}
   m_SplashScreenBackgroundColor: {r: 0.12156863, g: 0.12156863, b: 0.1254902, a: 1}
-  m_ShowUnitySplashScreen: 1
-  m_ShowUnitySplashLogo: 1
+  m_ShowUnitySplashScreen: 0
+  m_ShowUnitySplashLogo: 0
   m_SplashScreenOverlayOpacity: 1
   m_SplashScreenAnimation: 1
   m_SplashScreenLogoStyle: 1
@@ -293,7 +293,7 @@ PlayerSettings:
     height: 180
     banner: {fileID: 0}
   androidGamepadSupportLevel: 0
-  AndroidMinifyRelease: 0
+  AndroidMinifyRelease: 1
   AndroidMinifyDebug: 0
   AndroidValidateAppBundleSize: 1
   AndroidAppBundleSizeToValidate: 200
@@ -732,8 +732,11 @@ PlayerSettings:
   scriptingBackend:
     Android: 1
     iPhone: 1
-  il2cppCompilerConfiguration: {}
-  il2cppCodeGeneration: {}
+  il2cppCompilerConfiguration:
+    Android: 1
+  il2cppCodeGeneration:
+    Android: 1
+    iPhone: 1
   il2cppLTOMode: {}
   il2cppStacktraceInformation: {}
   managedStrippingLevel:

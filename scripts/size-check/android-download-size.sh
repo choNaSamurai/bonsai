@@ -17,5 +17,5 @@ echo '{"supportedAbis":["arm64-v8a"],"supportedLocales":["en"],"screenDensity":4
 "$JAVA" -jar "$BUNDLETOOL" build-apks --bundle="$AAB" --output="$TMP/app.apks" >/dev/null
 echo "== all devices (MIN,MAX bytes)"
 "$JAVA" -jar "$BUNDLETOOL" get-size total --apks="$TMP/app.apks"
-echo "== arm64 device spec (budget metric: <= 25 MB, hard cap 30 MB)"
+echo "== arm64 device spec (budget metric: <= 28 MB, hard cap 30 MB)"
 "$JAVA" -jar "$BUNDLETOOL" get-size total --apks="$TMP/app.apks" --device-spec="$TMP/device.json"

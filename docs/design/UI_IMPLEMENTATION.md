@@ -40,4 +40,13 @@
 
 ## 6. Локалізація
 
-- `com.unity.localization`, String Tables `UI`, `Onboarding`, `Store`. Мови MVP: en (+ ja за умови вичитки носієм); uk — v1.1 (див. GDD §10.6).
+> Оновлено 2026-10-05 (PA-101b, Unity Architect за рішенням власника): `com.unity.localization` + Addressables прибрано з проєкту (−0.65 МБ Android і передумова прибрати Newtonsoft, звіт PA-003b). Архітектура — ADR-0006 rev.2. **Це план**; реалізація — у задачі UI-кістяка (PA-107), власник розділу — UI/UX Developer.
+
+- **Мови MVP**: en (+ ja за умови вичитки носієм); uk — v1.1 (див. GDD §10.6).
+- **Таблиці** `UI`, `Onboarding`, `Store` — CSV/TSV у `Assets/_Project/Config/Localization/` (`key,en,ja,uk,comment`), UTF-8; джерело правди для перекладачів.
+- **Editor-імпортер** (`Pocket Arbor/Localization/Import`): CSV → `StringTable` ScriptableObject на мову (`string[]` за int-індексом) + згенерований `static class L` з `const int` ключами (`L.Hud_AgeDays`), + charset-файл для субсету шрифтів (ZenMaru, ja fallback). Імпорт детермінований (сортування ключів), щоб diff був читабельним.
+- **Рантайм**: порт `ILocalizer` (`string Get(int key)`, `ReadOnlyReactiveProperty<LocaleId> Current`); `LocalizedText` — компонент поруч із `TMP_Text`, у `OnEnable` бере рядок і підписується на зміну мови (R3, без лямбд-замикань у кадрі). Звертання — O(1) по масиву, 0 B GC.
+- **Параметри**: `string.Format` з `CultureInfo` поточної мови лише при зміні значення (не щокадру); лічильники з табулярними цифрами — через `TMP_Text.SetText("{0}", value)` без алокацій.
+- **Плюралізація**: ключі `_one`/`_other` (en), без форм для ja; uk (v1.1) — `few`/`many` за CLDR у `PluralRules`.
+- **Мова**: за замовчуванням з `Application.systemLanguage` (ja → ja, uk → uk у v1.1, інакше en), вибір у Settings, зберігається в `PlayerPrefs`.
+- **Fallback**: відсутній переклад → `en` + warning в Editor; EditMode-тест: кожен ключ має непорожній `en`, плейсхолдери `{0}` збігаються між мовами.
