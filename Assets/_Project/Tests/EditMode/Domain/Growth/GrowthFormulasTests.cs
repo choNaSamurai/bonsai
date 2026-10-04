@@ -192,7 +192,7 @@ namespace PocketArbor.Domain.Tests.Growth
             Assert.DoesNotThrow(c.Validate);
             Assert.AreEqual(200, c.MaxNodes);
             Assert.AreEqual(8, c.MaxDepth);
-            Assert.AreEqual(0.20, c.BaseGrowthProbability);
+            Assert.AreEqual(0.23, c.BaseGrowthProbability, "PA-102S AC15 compensation (BALANCE §1.2.10), was 0.20");
             Assert.AreEqual(1, c.ShootsPerDayMin);
             Assert.AreEqual(3, c.ShootsPerDayMax);
             Assert.AreEqual(0.25, c.ThickeningRate);
@@ -206,14 +206,66 @@ namespace PocketArbor.Domain.Tests.Growth
         }
 
         [Test]
+        public void GrowthConfig_ShapeDefaults_MatchBalanceSection12()
+        {
+            var c = GrowthConfig.CreateDefault();
+            Assert.AreEqual(new[] { 0.45, 0.85, 0.70, 0.95, 0.04, 0.05, 0.97 },
+                new[] { c.LateralSlotT0, c.LateralSlotT1, c.TrunkBaseSlotT0, c.TrunkBaseSlotT1, c.AttachTJitter, c.AttachTMin, c.AttachTMax });
+            Assert.AreEqual(new[] { 0.70, 0.90, 0.50, 0.30 },
+                new[] { c.SegmentTipTaper, c.ApicalThicknessRatio, c.LateralThicknessRatio, c.MinShootThickness });
+            Assert.AreEqual(5, c.TrunkChainSegments);
+            Assert.AreEqual(new[] { 0.85, 3.0, 0.10, 0.70, 45.0 },
+                new[] { c.TrunkSwayDecay, c.TrunkSwayJitterDeg, c.TrunkCurvatureJitter, c.OrderLengthFactor, c.ArcUpMinWorldAngleDeg });
+            Assert.AreEqual(new[] { 2.5, 1.5, 1.0, 0.25 }, new[] { c.ApicalDominanceWeight, c.TierWeight, c.PadWeight, c.InteriorWeight });
+            Assert.AreEqual(4, c.PadFullNodes);
+            Assert.AreEqual(0.30, c.SaplingTwigAttachT);
+            Assert.AreEqual(30.0, c.SaplingTwigWorldAngleDeg);
+        }
+
+        [TestCase(10.0, 0.0, 10.0)]
+        [TestCase(10.0, 1.0, 7.0)]
+        [TestCase(10.0, 0.5, 8.5)]
+        [TestCase(10.0, -3.0, 10.0)]
+        [TestCase(10.0, 7.0, 7.0)]
+        [TestCase(10.0, double.NaN, 10.0)]
+        public void ThicknessAt_AlongParent_LinearTaperToSegmentTipTaper(double parent, double t, double expected)
+        {
+            Assert.AreEqual(expected, GrowthFormulas.ThicknessAt(parent, t, 0.70), Eps);
+        }
+
+        [Test]
+        public void ThicknessCap_ApicalAndLateral_MatchBalanceRatios()
+        {
+            var c = GrowthConfig.CreateDefault();
+            // Apical at the tip: 0.90 × 0.70 = 0.63 of the parent base (BALANCE §1.2.2).
+            Assert.AreEqual(0.63 * 10.0, GrowthFormulas.ThicknessCap(10.0, 1.0, true, c), 1e-12);
+            // Lateral of #0 slot 0 at Д40 (th0 = 10.8 → th_at(0.70) = 8.53 → cap 4.27).
+            Assert.AreEqual(0.5 * 10.8 * (1.0 - 0.3 * 0.7), GrowthFormulas.ThicknessCap(10.8, 0.7, false, c), 1e-12);
+        }
+
+        [TestCase(-0.1, -1.0)]
+        [TestCase(0.0, 1.0)]
+        [TestCase(2.0, 1.0)]
+        public void SignNonZero_Zero_IsPositive(double value, double expected)
+        {
+            Assert.AreEqual(expected, GrowthFormulas.SignNonZero(value));
+        }
+
+        [Test]
         public void SpeciesConfig_Defaults_MatchBalanceSection3()
         {
             var k = SpeciesConfig.Kuromatsu();
             var m = SpeciesConfig.Momiji();
             var y = SpeciesConfig.Yamazakura();
-            Assert.AreEqual(new[] { 0.15, 45.0, 15.0, 0.45 }, new[] { k.KBase, k.BranchAngleMeanDeg, k.BranchAngleSpreadDeg, k.CurvatureSpread });
+            // ⚑ Kuromatsu secondary laterals 30° ± 10° (was 45° ± 15°, BALANCE §3 / §1.2.6).
+            Assert.AreEqual(new[] { 0.15, 30.0, 10.0, 0.45 }, new[] { k.KBase, k.BranchAngleMeanDeg, k.BranchAngleSpreadDeg, k.CurvatureSpread });
             Assert.AreEqual(new[] { 0.28, 30.0, 10.0, 0.20 }, new[] { m.KBase, m.BranchAngleMeanDeg, m.BranchAngleSpreadDeg, m.CurvatureSpread });
             Assert.AreEqual(new[] { 0.22, 35.0, 20.0, 0.30 }, new[] { y.KBase, y.BranchAngleMeanDeg, y.BranchAngleSpreadDeg, y.CurvatureSpread });
+            // BALANCE §1.2.3 / §1.2.5 / §1.2.6: primary angle, spread, sway, droop.
+            Assert.AreEqual(new[] { 80.0, 6.0, 14.0, 0.50 }, new[] { k.PrimaryAngleMeanDeg, k.PrimaryAngleSpreadDeg, k.TrunkSwayDeg, k.BranchDroop });
+            Assert.AreEqual(new[] { 62.0, 10.0, 9.0, 0.20 }, new[] { m.PrimaryAngleMeanDeg, m.PrimaryAngleSpreadDeg, m.TrunkSwayDeg, m.BranchDroop });
+            Assert.AreEqual(new[] { 70.0, 10.0, 12.0, 0.30 }, new[] { y.PrimaryAngleMeanDeg, y.PrimaryAngleSpreadDeg, y.TrunkSwayDeg, y.BranchDroop });
+            Assert.AreEqual(new[] { 1, 2, 2 }, new[] { k.PadDepth, m.PadDepth, y.PadDepth });
         }
     }
 }

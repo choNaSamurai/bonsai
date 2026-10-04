@@ -20,6 +20,8 @@ namespace PocketArbor.Domain.Growth
         readonly int[] _childCount = new int[TreeGraph.Capacity];
         readonly int[] _candidates = new int[TreeGraph.Capacity];
         readonly double[] _weights = new double[TreeGraph.Capacity];
+        readonly double[] _selectionWeights = new double[TreeGraph.Capacity];
+        readonly TreeShapeAnalysis _shape = new TreeShapeAnalysis();
 
         public GrowthSimulator(GrowthConfig config, SoilConfig soil, SpeciesCatalog species)
         {
@@ -30,6 +32,9 @@ namespace PocketArbor.Domain.Growth
         }
 
         public GrowthConfig Config => _config;
+
+        /// <summary>Generator of the current day (tests verify the 8-draws-per-shoot stream layout via its state).</summary>
+        internal Pcg32 Rng => _rng;
 
         /// <summary>M_soil for a moisture value with the configured thresholds.</summary>
         public double MoistureFactor(double moisture) =>
@@ -130,7 +135,17 @@ namespace PocketArbor.Domain.Growth
                 double depthScale = GrowthFormulas.DepthScale(node.Depth, cfg);
                 double thMax = cfg.MaxThickness * depthScale;
                 double k = node.Depth == 0 && nebari ? cfg.ThickeningRate * cfg.NebariThickeningMultiplier : cfg.ThickeningRate;
-                node.Thickness = GrowthFormulas.Thicken(node.Thickness, thMax, k, meanMoisture, depthScale, 1.0);
+                double thickness = node.Thickness;
+                double thickened = GrowthFormulas.Thicken(thickness, thMax, k, meanMoisture, depthScale, 1.0);
+                if (node.ParentIndex >= 0)
+                {
+                    // ⚑ BALANCE §1.2.2: taper ceiling th_cap from the parent, already updated (index order);
+                    // clamp to [th, max(th, min(th_max, th_cap))] — never shrinks.
+                    double cap = GrowthFormulas.ThicknessCap(tree.NodeAt(node.ParentIndex).Thickness, node.AttachT, node.BranchSide == 0, cfg);
+                    double upper = cap > thickness ? cap : thickness;
+                    if (thickened > upper) thickened = upper;
+                }
+                node.Thickness = thickened;
             }
 
             // 6. Shoot spawning.
@@ -167,8 +182,9 @@ namespace PocketArbor.Domain.Growth
                 if (candidateCount == 0) break;
 
                 ShootDraws u = ShootDraws.Next(_rng);
-                int parentIndex = PickParent(candidateCount, u.U1 * weightSum);
-                NodeData shoot = ShootBuilder.Build(tree, parentIndex, in u, cfg, species, tree.Genome.BendBias);
+                double selectionSum = ComputeSelectionWeights(tree, species, candidateCount);
+                int parentIndex = PickParent(candidateCount, u.U1 * selectionSum);
+                NodeData shoot = ShootBuilder.Build(tree, parentIndex, in u, cfg, species);
                 tree.Append(shoot);
             }
 
@@ -201,13 +217,35 @@ namespace PocketArbor.Domain.Growth
             return candidates;
         }
 
-        /// <summary>First candidate whose cumulative weight exceeds <paramref name="threshold"/> = u1·Σw.</summary>
+        /// <summary>
+        /// ⚑ BALANCE §1.2.7: selection weights s_i = w_i · RoleWeight_i, roles recomputed before every shoot.
+        /// Returns Σs. The rate (step 6.2) still uses Σw.
+        /// </summary>
+        double ComputeSelectionWeights(TreeGraph tree, SpeciesConfig species, int candidateCount)
+        {
+            GrowthConfig cfg = _config;
+            _shape.Analyze(tree.Nodes, cfg.TrunkChainSegments, species.PadDepth);
+            double sum = 0.0;
+            for (int c = 0; c < candidateCount; c++)
+            {
+                int i = _candidates[c];
+                double role;
+                if (_shape.IsTrunkChain(i)) role = _shape.ApicalChild(i) < 0 ? cfg.ApicalDominanceWeight : cfg.TierWeight;
+                else role = _shape.TipDistance(i) <= species.PadDepth ? cfg.PadWeight : cfg.InteriorWeight;
+                double s = _weights[c] * role;
+                _selectionWeights[c] = s;
+                sum += s;
+            }
+            return sum;
+        }
+
+        /// <summary>First candidate whose cumulative selection weight exceeds <paramref name="threshold"/> = u1·Σs.</summary>
         int PickParent(int candidateCount, double threshold)
         {
             double cumulative = 0.0;
             for (int i = 0; i < candidateCount; i++)
             {
-                cumulative += _weights[i];
+                cumulative += _selectionWeights[i];
                 if (cumulative > threshold) return _candidates[i];
             }
             // BALANCE §1.1: interpretation — floating-point rounding fallback: the last candidate.

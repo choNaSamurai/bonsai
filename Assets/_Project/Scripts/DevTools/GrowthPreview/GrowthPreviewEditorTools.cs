@@ -55,7 +55,7 @@ namespace PocketArbor.DevTools.GrowthPreview
                 string[] args = Environment.GetCommandLineArgs();
                 if (Array.IndexOf(args, "-createScene") >= 0) CreateScene();
                 string outDir = ArgValue(args, "-captureOut");
-                if (!string.IsNullOrEmpty(outDir)) Capture(outDir, new[] { 10, 40, 80 }, 1024);
+                if (!string.IsNullOrEmpty(outDir)) Capture(outDir, new[] { 10, 20, 40, 80 }, 1024);
             }
             catch (Exception e)
             {
@@ -75,26 +75,38 @@ namespace PocketArbor.DevTools.GrowthPreview
 
             var rt = new RenderTexture(size, size, 24, RenderTextureFormat.ARGB32, RenderTextureReadWrite.sRGB) { antiAliasing = 4 };
             var readback = new Texture2D(size, size, TextureFormat.RGBA32, false);
+            var report = new System.Text.StringBuilder("species,mode,day,nodes,pads,taper_ratio,H,W,th0,th0_flared,P\n");
             try
             {
                 camera.targetTexture = rt;
-                foreach (SpeciesId species in new[] { SpeciesId.Kuromatsu, SpeciesId.Momiji, SpeciesId.Yamazakura })
+                foreach (bool styled in new[] { false, true })
                 {
-                    controller.SetSpecies(species);
-                    foreach (int day in days)
+                    controller.SetStyled(styled);
+                    foreach (SpeciesId species in new[] { SpeciesId.Kuromatsu, SpeciesId.Momiji, SpeciesId.Yamazakura })
                     {
-                        controller.SetDay(day);
-                        camera.Render();
-                        RenderTexture previous = RenderTexture.active;
-                        RenderTexture.active = rt;
-                        readback.ReadPixels(new Rect(0, 0, size, size), 0, 0);
-                        readback.Apply();
-                        RenderTexture.active = previous;
-                        string file = Path.Combine(outDir, species + "_day" + day.ToString("000") + "_n" + controller.NodeCount + ".png");
-                        File.WriteAllBytes(file, readback.EncodeToPNG());
-                        Debug.Log("[GrowthPreview] captured " + file);
+                        controller.SetSpecies(species);
+                        foreach (int day in days)
+                        {
+                            controller.SetDay(day);
+                            camera.Render();
+                            RenderTexture previous = RenderTexture.active;
+                            RenderTexture.active = rt;
+                            readback.ReadPixels(new Rect(0, 0, size, size), 0, 0);
+                            readback.Apply();
+                            RenderTexture.active = previous;
+                            string mode = styled ? "styled" : "wild";
+                            string file = Path.Combine(outDir, species + "_" + mode + "_day" + day.ToString("000") + "_n" + controller.NodeCount + ".png");
+                            File.WriteAllBytes(file, readback.EncodeToPNG());
+                            report.Append(species).Append(',').Append(mode).Append(',').Append(day).Append(',').Append(controller.NodeCount)
+                                .Append(',').Append(controller.PadCount).Append(',')
+                                .Append(F(controller.TaperRatio)).Append(',').Append(F(controller.Builder.LastHeight)).Append(',')
+                                .Append(F(controller.Builder.LastCrownWidth)).Append(',').Append(F(controller.Builder.LastTrunkBase)).Append(',')
+                                .Append(F(controller.Builder.LastTrunkBaseFlared)).Append(',').Append(F(controller.Builder.LastPotWidth)).Append('\n');
+                            Debug.Log("[GrowthPreview] captured " + file);
+                        }
                     }
                 }
+                File.WriteAllText(Path.Combine(outDir, "metrics.csv"), report.ToString());
             }
             finally
             {
@@ -103,6 +115,8 @@ namespace PocketArbor.DevTools.GrowthPreview
                 UnityEngine.Object.DestroyImmediate(readback);
             }
         }
+
+        static string F(float value) => value.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture);
 
         static string ArgValue(string[] args, string name)
         {

@@ -16,6 +16,15 @@ namespace PocketArbor.DevTools.GrowthPreview
         public const int MaxPreviewDay = 120;
         public const int Reach200SearchDays = 400;
 
+        /// <summary>PA-102S AC19: styling sessions of the Styled mode.</summary>
+        public static readonly int[] StyleDays = { 20, 30, 40, 50, 60, 70 };
+
+        /// <summary>PruneToStyle: branch nodes farther than this many segments from the trunk are cut.</summary>
+        public const int StyleMaxBranchSegments = 3;
+
+        /// <summary>PruneToStyle: of two tiers attached closer than this (units of height), the lower one is cut.</summary>
+        public const double StyleMinTierGap = 12.0;
+
         readonly GrowthConfig _config = GrowthConfig.CreateDefault();
         readonly SoilConfig _soil = SoilConfig.CreateDefault();
         readonly SpeciesCatalog _species = SpeciesCatalog.CreateDefault();
@@ -31,6 +40,7 @@ namespace PocketArbor.DevTools.GrowthPreview
         double _temperatureC = 25.0;
         double _moisture = 0.5;
         bool _onboardingCut;
+        bool _styled;
         int _dayReaching200 = -2; // -2 = not computed, -1 = not within search window
 
         public GrowthPreviewModel()
@@ -47,6 +57,16 @@ namespace PocketArbor.DevTools.GrowthPreview
         public double Moisture => _moisture;
         public bool OnboardingCut => _onboardingCut;
         public int CutCount => _cuts.Count;
+        public bool Styled => _styled;
+
+        /// <summary>Wild (no pruning) or Styled (<see cref="PruneToStyle"/> on <see cref="StyleDays"/>).</summary>
+        public void SetStyled(bool styled)
+        {
+            if (styled == _styled) return;
+            _styled = styled;
+            _cuts.Clear();
+            Invalidate(0);
+        }
 
         /// <summary>Changes invalidate the cache (and recorded cuts) only when a value actually changes.</summary>
         public void SetParameters(SpeciesId species, uint seed, double vigor, double bendBias, double temperatureC, double moisture, bool onboardingCut)
@@ -118,6 +138,90 @@ namespace PocketArbor.DevTools.GrowthPreview
             return result;
         }
 
+        /// <summary>
+        /// Simple moyogi styling script (PA-102S AC19), in order: (1) the sapling's wild twig (trunk lateral below the tier
+        /// slots); (2) every branch node farther than <see cref="StyleMaxBranchSegments"/> segments from the trunk chain
+        /// (crown axis included); (3) of two primaries attached closer than <see cref="StyleMinTierGap"/> in height, the
+        /// lower one; (4) interior shoots — laterals of interior branch nodes. Returns the number of cuts.
+        /// </summary>
+        public static int PruneToStyle(TreeGraph tree, GrowthConfig config, SpeciesConfig species)
+        {
+            var shape = new TreeShapeAnalysis();
+            var targets = new List<int>();
+            int cuts = 0;
+
+            // (1) Wild twig.
+            for (int i = 1; i < tree.Count; i++)
+            {
+                NodeData n = tree.Nodes[i];
+                if (n.ParentIndex == 0 && n.BranchSide != 0 && n.AttachT < config.TrunkBaseSlotT0 - config.AttachTJitter - 1e-9) targets.Add(n.Id);
+            }
+            cuts += PruneAll(tree, targets, config);
+
+            // (2) Branch "legs": nodes more than N segments from their trunk-chain ancestor.
+            shape.Analyze(tree, config, species);
+            for (int i = 1; i < tree.Count; i++)
+            {
+                if (shape.IsTrunkChain(i)) continue;
+                int anchor = tree.Nodes[i].ParentIndex;
+                while (anchor > 0 && !shape.IsTrunkChain(anchor)) anchor = tree.Nodes[anchor].ParentIndex;
+                if (tree.Nodes[i].Depth - tree.Nodes[anchor].Depth == StyleMaxBranchSegments + 1) targets.Add(tree.Nodes[i].Id);
+            }
+            cuts += PruneAll(tree, targets, config);
+
+            // (3) Tiers too close in height: cut the lower of the pair.
+            shape.Analyze(tree, config, species);
+            var baseY = AttachHeights(tree);
+            var primaries = new List<int>();
+            for (int i = 1; i < tree.Count; i++)
+            {
+                if (shape.IsPrimary(i)) primaries.Add(i);
+            }
+            primaries.Sort((a, b) => baseY[a].CompareTo(baseY[b]));
+            for (int j = 1; j < primaries.Count; j++)
+            {
+                if (baseY[primaries[j]] - baseY[primaries[j - 1]] < StyleMinTierGap) targets.Add(tree.Nodes[primaries[j - 1]].Id);
+            }
+            cuts += PruneAll(tree, targets, config);
+
+            // (4) Interior shoots.
+            shape.Analyze(tree, config, species);
+            for (int i = 1; i < tree.Count; i++)
+            {
+                int parent = tree.Nodes[i].ParentIndex;
+                if (tree.Nodes[i].BranchSide != 0 && !shape.IsTrunkChain(parent) && shape.IsInterior(parent)) targets.Add(tree.Nodes[i].Id);
+            }
+            cuts += PruneAll(tree, targets, config);
+            return cuts;
+        }
+
+        static int PruneAll(TreeGraph tree, List<int> ids, GrowthConfig config)
+        {
+            int cuts = 0;
+            for (int k = 0; k < ids.Count; k++)
+            {
+                if (tree.IndexOf(ids[k]) < 0) continue; // already removed with an ancestor
+                if (TreePruning.Prune(tree, ids[k], config).Succeeded) cuts++;
+            }
+            ids.Clear();
+            return cuts;
+        }
+
+        /// <summary>Height of every node's base (chord geometry, AttachT along the parent chord).</summary>
+        public static double[] AttachHeights(TreeGraph tree)
+        {
+            var nodes = tree.Nodes;
+            var baseY = new double[nodes.Length];
+            var tipY = new double[nodes.Length];
+            for (int i = 0; i < nodes.Length; i++)
+            {
+                int p = nodes[i].ParentIndex;
+                baseY[i] = p < 0 ? 0.0 : baseY[p] + nodes[i].AttachT * (tipY[p] - baseY[p]);
+                tipY[i] = baseY[i] + nodes[i].Length * Math.Cos(tree.WorldAngle(i));
+            }
+            return baseY;
+        }
+
         void Invalidate(int fromDay)
         {
             if (_days.Count > fromDay) _days.RemoveRange(fromDay, _days.Count - fromDay);
@@ -136,6 +240,7 @@ namespace PocketArbor.DevTools.GrowthPreview
                 tree = TreeGraph.FromSnapshot(_days[day - 1]);
                 RunOneDay(tree);
             }
+            if (_styled && Array.IndexOf(StyleDays, day) >= 0) PruneToStyle(tree, _config, SpeciesConfig);
             ApplyCuts(tree, day, _cuts.Count);
             return tree.ToSnapshot();
         }

@@ -28,31 +28,41 @@ namespace PocketArbor.Domain.Tests.Growth
             Assert.AreEqual(config.TrunkTargetLength, n[0].TargetLength);
             Assert.AreEqual(config.TrunkInitialThickness, n[0].Thickness);
             Assert.IsFalse(n[0].HasLeaves);
-            Assert.LessOrEqual(Math.Abs(n[0].Curvature), species.CurvatureSpread);
+            Assert.LessOrEqual(Math.Abs(n[0].Curvature), config.TrunkCurvatureJitter, "BALANCE §1.2.8: tri(0, TrunkCurvatureJitter)");
+            Assert.AreEqual(1.0, n[0].AttachT);
+
+            int tierPhase = TreeShapeAnalysis.TierPhase(7u);
+            double d2r = GrowthFormulas.DegToRad;
 
             Assert.AreEqual(1, n[1].Depth);
             Assert.AreEqual(0, n[1].ParentIndex);
             Assert.AreEqual(0, n[1].BranchSide, "leader is apical");
+            Assert.AreEqual(1.0, n[1].AttachT);
             Assert.AreEqual(NodeStatus.Growing, n[1].Status);
             Assert.AreEqual(config.SaplingLeaderLength, n[1].Length);
             Assert.AreEqual(config.SaplingLeaderThickness, n[1].Thickness);
             Assert.AreEqual(config.SaplingLeaderAgeDays, n[1].AgeDays);
             Assert.AreEqual(1f, n[1].LeafScale);
-            Assert.LessOrEqual(Math.Abs(n[1].BaseAngle), config.ApicalAngleJitterDeg * GrowthFormulas.DegToRad + 1e-12);
+            // Leader = trunk segment k = 1 (BALANCE §1.2.3): θ_1 = −TierPhase·TrunkSwayDeg ± TrunkSwayJitterDeg (bendBias 0).
+            Assert.AreEqual(-tierPhase * species.TrunkSwayDeg * d2r, tree.WorldAngle(1), config.TrunkSwayJitterDeg * d2r + 1e-12);
+            Assert.LessOrEqual(Math.Abs(n[1].Curvature), config.TrunkCurvatureJitter);
             double apicalTarget = config.ShootBaseLength * config.ApicalLengthMultiplier;
             Assert.That(n[1].TargetLength, Is.InRange(apicalTarget * 0.8, apicalTarget * 1.2));
 
+            // Wild twig (BALANCE §1.2.8): slot 0 of #0, AttachT 0.30, side −TierPhase, world angle side·30°, Curvature 0.
             Assert.AreEqual(1, n[2].Depth);
             Assert.AreEqual(0, n[2].ParentIndex);
-            Assert.AreNotEqual(0, n[2].BranchSide, "twig is lateral");
+            Assert.AreEqual(-tierPhase, n[2].BranchSide, "twig side = −TierPhase");
+            Assert.AreEqual(config.SaplingTwigAttachT, n[2].AttachT);
+            Assert.AreEqual(n[2].BranchSide * config.SaplingTwigWorldAngleDeg * d2r, tree.WorldAngle(2), 1e-12);
+            Assert.AreEqual(0.0, n[2].Curvature);
             Assert.AreEqual(NodeStatus.Growing, n[2].Status);
             Assert.AreEqual(config.SaplingTwigLength, n[2].Length);
             Assert.AreEqual(config.SaplingTwigThickness, n[2].Thickness);
             Assert.AreEqual(config.SaplingTwigAgeDays, n[2].AgeDays);
             Assert.AreEqual(1f, n[2].LeafScale);
-            double extreme = (species.BranchAngleMeanDeg + species.BranchAngleSpreadDeg) * GrowthFormulas.DegToRad;
-            Assert.AreEqual(n[2].BranchSide * extreme, n[2].BaseAngle, 1e-12);
-            Assert.That(n[2].TargetLength, Is.InRange(config.ShootBaseLength * 0.8, config.ShootBaseLength * 1.2));
+            // BALANCE §1.2.8: interpretation — u5 unused → primary length of depth 1 without jitter.
+            Assert.AreEqual(config.ShootBaseLength * config.OrderLengthFactor, n[2].TargetLength, 1e-12);
 
             Assert.AreEqual(1, tree.Version);
             Assert.AreEqual(0, tree.Growth.GrowthDayIndex);
@@ -61,13 +71,17 @@ namespace PocketArbor.Domain.Tests.Growth
         }
 
         [Test]
-        public void PlantSapling_BendBias_TiltsTrunkAndLeader()
+        public void PlantSapling_BendBias_TiltsTrunkAndAmplifiesLeaderSway()
         {
             var config = GrowthConfig.CreateDefault();
-            var tree = TreeFactory.PlantSapling(new TreeGenome(1u, SpeciesId.Momiji, 1.0, 0.5), config, SpeciesConfig.Momiji());
-            Assert.AreEqual(0.5 * config.TrunkBendScaleDeg * GrowthFormulas.DegToRad, tree.Nodes[0].BaseAngle, 1e-12);
-            double center = 0.5 * config.ApicalBendScaleDeg * GrowthFormulas.DegToRad;
-            Assert.AreEqual(center, tree.Nodes[1].BaseAngle, config.ApicalAngleJitterDeg * GrowthFormulas.DegToRad + 1e-12);
+            var species = SpeciesConfig.Momiji();
+            var tree = TreeFactory.PlantSapling(new TreeGenome(1u, SpeciesId.Momiji, 1.0, 0.5), config, species);
+            double d2r = GrowthFormulas.DegToRad;
+            double lean = 0.5 * config.TrunkBendScaleDeg;
+            Assert.AreEqual(lean * d2r, tree.Nodes[0].BaseAngle, 1e-12);
+            // θ_1 = lean + TierPhase·(−1)·TrunkSwayDeg·(1 + |bendBias|) ± jitter (seed 1 → TierPhase −1).
+            double center = lean + TreeShapeAnalysis.TierPhase(1u) * -1.0 * species.TrunkSwayDeg * 1.5;
+            Assert.AreEqual(center * d2r, tree.WorldAngle(1), config.TrunkSwayJitterDeg * d2r + 1e-12);
         }
 
         [Test]
@@ -129,7 +143,8 @@ namespace PocketArbor.Domain.Tests.Growth
             Assert.AreEqual(NodeStatus.Bud, bud.Status);
             Assert.AreEqual(0, bud.AgeDays);
             Assert.AreEqual(config.PhoenixBudLength, bud.Length);
-            Assert.AreEqual(config.PhoenixBudThickness, bud.Thickness);
+            Assert.AreEqual(config.PhoenixBudThickness, bud.Thickness, "th_cap = 0.63 × 4.0 = 2.52 > 2.5");
+            Assert.AreEqual(1.0, bud.AttachT, "BALANCE §1.2.8: Phoenix AttachT = 1");
             Assert.AreEqual(0.0, bud.Curvature);
             Assert.AreEqual(0, bud.BranchSide);
             Assert.AreEqual(config.ShootBaseLength * config.ApicalLengthMultiplier, bud.TargetLength, 1e-12);
@@ -289,6 +304,28 @@ namespace PocketArbor.Domain.Tests.Growth
             GrowthTestKit.RunDays(sim, original, 20);
             GrowthTestKit.RunDays(sim, restored, 20);
             Assert.IsTrue(original.ToSnapshot().BitwiseEquals(restored.ToSnapshot()));
+        }
+
+        [Test]
+        public void Snapshot_AttachT_IsPartOfBitwiseEqualityAndValidated()
+        {
+            var tree = GrowthTestKit.Sapling(3u);
+            var snapshot = tree.ToSnapshot();
+            var nodes = snapshot.Nodes.ToArray();
+            Assert.AreEqual(0.30, nodes[2].AttachT);
+
+            nodes[2].AttachT = BitConverter.Int64BitsToDouble(BitConverter.DoubleToInt64Bits(0.30) + 1); // 1 ulp
+            var changed = new TreeSnapshot(tree.Genome, tree.Growth, tree.Version, tree.NextId, nodes);
+            Assert.IsFalse(snapshot.BitwiseEquals(changed), "AttachT is compared bit by bit");
+            Assert.IsTrue(TreeGraph.FromSnapshot(changed).ToSnapshot().BitwiseEquals(changed), "round-trip keeps AttachT");
+
+            foreach (double bad in new[] { -0.01, 1.01, double.NaN, double.PositiveInfinity })
+            {
+                nodes[2].AttachT = bad;
+                var broken = new TreeSnapshot(tree.Genome, tree.Growth, tree.Version, tree.NextId, nodes);
+                Assert.IsFalse(TreeGraph.TryFromSnapshot(broken, out _, out var error), "AttachT " + bad);
+                StringAssert.Contains("AttachT", error);
+            }
         }
 
         [Test]

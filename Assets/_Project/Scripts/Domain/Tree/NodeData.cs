@@ -52,9 +52,19 @@ namespace PocketArbor.Domain.Tree
         /// </summary>
         public sbyte BranchSide;
 
+        /// <summary>
+        /// Fraction of the parent length where this shoot starts, 0..1 (BALANCE §1.2.1, proposal to ADR-0003 / save
+        /// ADR-0008). Apical shoots and the trunk: 1.0; laterals: [AttachTMin, AttachTMax]. Relative, so the attachment
+        /// point moves with the parent's elongation. Missing in old data → 1.0 (deserializer's responsibility, PA-205).
+        /// </summary>
+        public double AttachT;
+
         /// <summary>BALANCE §1.1: HasLeaves ≡ Depth ≥ 1 ∧ Status ∈ {Growing, Mature}. Not persisted.</summary>
         public bool HasLeaves => Depth >= 1 && (Status == NodeStatus.Growing || Status == NodeStatus.Mature);
 
         public bool IsLateral => BranchSide != 0;
+
+        /// <summary>Depth ≥ 1 and not lateral.</summary>
+        public bool IsApical => Depth >= 1 && BranchSide == 0;
     }
 }

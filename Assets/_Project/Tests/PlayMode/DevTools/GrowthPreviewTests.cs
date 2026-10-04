@@ -1,5 +1,6 @@
 using System.Collections;
 using NUnit.Framework;
+using PocketArbor.Domain.Growth;
 using PocketArbor.DevTools.GrowthPreview;
 using PocketArbor.Domain.Tree;
 using UnityEditor.SceneManagement;
@@ -78,6 +79,62 @@ namespace PocketArbor.DevTools.Tests
             var model = new GrowthPreviewModel();
             int day = model.DayReachingMaxNodes();
             Assert.That(day, Is.InRange(66, 110));
+        }
+
+        [Test]
+        public void Model_Styled_PruneToStyleCutsAndKeepsTiers()
+        {
+            foreach (SpeciesId species in new[] { SpeciesId.Kuromatsu, SpeciesId.Momiji, SpeciesId.Yamazakura })
+            {
+                var wild = new GrowthPreviewModel();
+                wild.SetParameters(species, 20261004u, 1.0, 0.0, 25.0, 0.5, false);
+                var styled = new GrowthPreviewModel();
+                styled.SetParameters(species, 20261004u, 1.0, 0.0, 25.0, 0.5, false);
+                styled.SetStyled(true);
+
+                TreeGraph tree = styled.GetTree(80);
+                Assert.Less(tree.Count, wild.GetTree(80).Count, species + ": styling removes nodes");
+                var shape = new TreeShapeAnalysis();
+                shape.Analyze(tree, styled.Config, styled.SpeciesConfig);
+                int primaries = 0;
+                for (int i = 1; i < tree.Count; i++)
+                {
+                    if (shape.IsPrimary(i)) primaries++;
+                    Assert.IsFalse(tree.Nodes[i].ParentIndex == 0 && tree.Nodes[i].AttachT < 0.5, "wild twig is gone");
+                }
+                Assert.GreaterOrEqual(primaries, 3, species + ": ≥ 3 tiers after styling");
+                Assert.IsTrue(styled.GetDay(80).BitwiseEquals(styled.GetDay(80)));
+            }
+        }
+
+        [Test]
+        public void MeshBuilder_Day40And80_NebariBaseToTwoThirdsWidthAtLeast4()
+        {
+            var builder = new TreePreviewMeshBuilder();
+            var mesh = new Mesh();
+            try
+            {
+                foreach (SpeciesId species in new[] { SpeciesId.Kuromatsu, SpeciesId.Momiji, SpeciesId.Yamazakura })
+                {
+                    foreach (bool styled in new[] { false, true })
+                    {
+                        var model = new GrowthPreviewModel();
+                        model.SetParameters(species, 20261004u, 1.0, 0.0, 25.0, 0.5, false);
+                        model.SetStyled(styled);
+                        foreach (int day in new[] { 40, 80 })
+                        {
+                            builder.Build(model.GetTree(day), mesh, model.Config, model.SpeciesConfig);
+                            TestContext.Out.WriteLine(species + (styled ? " styled" : " wild") + " D" + day + ": taper " + builder.LastTaperRatio.ToString("0.00") + ", pads " + builder.LastPadCount);
+                            Assert.GreaterOrEqual(builder.LastTaperRatio, 4.0f, species + " D" + day);
+                            Assert.Greater(mesh.vertexCount, 0);
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                Object.DestroyImmediate(mesh);
+            }
         }
     }
 }

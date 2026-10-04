@@ -52,7 +52,7 @@ namespace PocketArbor.Domain.Tree
             return new PruneResult(PruneStatus.Pruned, removed, phoenixId);
         }
 
-        /// <summary>Phoenix bud: apical child of the trunk, no RNG (BALANCE §1.1).</summary>
+        /// <summary>Phoenix bud: apical child of the trunk, no RNG (BALANCE §1.1; ⚑ §1.2.8: AttachT = 1, thickness ≤ th_cap).</summary>
         static int SpawnPhoenix(TreeGraph tree, GrowthConfig config)
         {
             double angle = ShootBuilder.ClampToPotLip(tree.WorldAngle(0),
@@ -64,7 +64,8 @@ namespace PocketArbor.Domain.Tree
                 Depth = depth,
                 Length = config.PhoenixBudLength,
                 TargetLength = config.ShootBaseLength * config.ApicalLengthMultiplier,
-                Thickness = Math.Min(config.PhoenixBudThickness, GrowthFormulas.MaxThicknessAt(depth, config)),
+                Thickness = Math.Min(config.PhoenixBudThickness, Math.Min(GrowthFormulas.MaxThicknessAt(depth, config),
+                    GrowthFormulas.ThicknessCap(tree.Nodes[0].Thickness, 1.0, true, config))),
                 BaseAngle = angle,
                 CurrentAngle = angle,
                 Curvature = 0.0,
@@ -72,6 +73,7 @@ namespace PocketArbor.Domain.Tree
                 Status = NodeStatus.Bud,
                 LeafScale = 0f,
                 BranchSide = 0,
+                AttachT = 1.0,
             });
             return tree.Nodes[index].Id;
         }

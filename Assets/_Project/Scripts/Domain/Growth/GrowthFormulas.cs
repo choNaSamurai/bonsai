@@ -99,6 +99,23 @@ namespace PocketArbor.Domain.Growth
         /// <summary>Triangular sample tri(m, s) = m + s·(u_a + u_b − 1) ∈ [m − s, m + s].</summary>
         public static double Triangular(double mean, double spread, double ua, double ub) => mean + spread * (ua + ub - 1.0);
 
+        /// <summary>BALANCE §1.2.2: th_at(p, t) = th_p·(1 − (1 − SegmentTipTaper)·t); t and taper clamped to [0, 1].</summary>
+        public static double ThicknessAt(double parentThickness, double t, double segmentTipTaper) =>
+            parentThickness * (1.0 - (1.0 - Clamp01(segmentTipTaper)) * Clamp01(t));
+
+        /// <summary>
+        /// BALANCE §1.2.2 taper ceiling of a depth ≥ 1 node: th_cap = R·th_at(parent, AttachT),
+        /// R = ApicalThicknessRatio (apical) / LateralThicknessRatio (lateral).
+        /// </summary>
+        public static double ThicknessCap(double parentThickness, double attachT, bool apical, GrowthConfig config)
+        {
+            double ratio = apical ? config.ApicalThicknessRatio : config.LateralThicknessRatio;
+            return ratio * ThicknessAt(parentThickness, attachT, config.SegmentTipTaper);
+        }
+
+        /// <summary>sgn with sgn(0) = +1 (BALANCE §1.2.0).</summary>
+        public static double SignNonZero(double value) => value < 0.0 ? -1.0 : 1.0;
+
         public const double DegToRad = Math.PI / 180.0;
     }
 }

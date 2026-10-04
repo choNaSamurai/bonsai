@@ -4,23 +4,30 @@ using PocketArbor.Domain.Random;
 
 namespace PocketArbor.Domain.Tree
 {
-    /// <summary>Planting (BALANCE §1.1 «Посадка», PCG32 stream 0).</summary>
+    /// <summary>Planting (BALANCE §1.1 «Посадка», §1.2.8; PCG32 stream 0, exactly 18 draws).</summary>
     public static class TreeFactory
     {
+        /// <summary>Uniform draws consumed by planting: 2 (trunk curvature) + 8 (leader) + 8 (wild twig).</summary>
+        public const int PlantingDraws = 2 + 2 * ShootDraws.DrawsPerShoot;
+
         /// <summary>
-        /// Starting sapling, N = 3: #0 trunk, #1 leader (apical child of the trunk), #2 wild twig (lateral child of the
-        /// trunk; the onboarding cut target). Growth counters are 0; the tree starts frozen (onboarding Freeze Guard).
+        /// Starting sapling, N = 3: #0 trunk, #1 leader (trunk segment k = 1), #2 wild twig (lateral of the trunk in slot 0,
+        /// AttachT 0.30; the onboarding cut target). Growth counters are 0; the tree starts frozen (onboarding Freeze Guard).
         /// </summary>
-        public static TreeGraph PlantSapling(TreeGenome genome, GrowthConfig config, SpeciesConfig species)
+        public static TreeGraph PlantSapling(TreeGenome genome, GrowthConfig config, SpeciesConfig species) =>
+            PlantSapling(genome, config, species, new Pcg32(genome.Seed, 0UL));
+
+        /// <summary>Planting with an explicit stream-0 source (tests count the draws).</summary>
+        internal static TreeGraph PlantSapling(TreeGenome genome, GrowthConfig config, SpeciesConfig species, IRandomSource rng)
         {
             if (config == null) throw new ArgumentNullException(nameof(config));
             if (species == null) throw new ArgumentNullException(nameof(species));
+            if (rng == null) throw new ArgumentNullException(nameof(rng));
 
             var tree = new TreeGraph(genome);
             tree.SetGrowthFrozen(true);
-            var rng = new Pcg32(genome.Seed, 0UL);
 
-            // #0 trunk. BALANCE §1.1: interpretation — trunk curvature consumes exactly 2 draws, before the shoots.
+            // #0 trunk. BALANCE §1.2.8: Curvature = tri(0, TrunkCurvatureJitter), exactly 2 draws, before the shoots.
             double ua = ShootDraws.Uniform(rng);
             double ub = ShootDraws.Uniform(rng);
             double trunkAngle = ShootBuilder.ClampToPotLip(0.0, genome.BendBias * config.TrunkBendScaleDeg * GrowthFormulas.DegToRad, config);
@@ -33,32 +40,26 @@ namespace PocketArbor.Domain.Tree
                 Thickness = config.TrunkInitialThickness,
                 BaseAngle = trunkAngle,
                 CurrentAngle = trunkAngle,
-                Curvature = GrowthFormulas.Triangular(0.0, species.CurvatureSpread, ua, ub),
+                Curvature = GrowthFormulas.Triangular(0.0, config.TrunkCurvatureJitter, ua, ub),
                 Status = NodeStatus.Mature,
                 LeafScale = 0f,
+                AttachT = 1.0,
             });
 
-            // #1 leader: apical child (7 draws), sapling overrides.
+            // #1 leader: trunk segment k = 1 (8 draws), sapling overrides of length / thickness / age.
             ShootDraws leaderDraws = ShootDraws.Next(rng);
-            NodeData leader = ShootBuilder.Build(tree, 0, in leaderDraws, config, species, genome.BendBias);
+            NodeData leader = ShootBuilder.Build(tree, 0, in leaderDraws, config, species);
             leader.Length = config.SaplingLeaderLength;
-            leader.Thickness = Math.Min(config.SaplingLeaderThickness, GrowthFormulas.MaxThicknessAt(leader.Depth, config));
+            leader.Thickness = Math.Min(config.SaplingLeaderThickness, Math.Min(GrowthFormulas.MaxThicknessAt(leader.Depth, config),
+                GrowthFormulas.ThicknessCap(config.TrunkInitialThickness, leader.AttachT, true, config)));
             leader.Status = NodeStatus.Growing;
             leader.AgeDays = config.SaplingLeaderAgeDays;
             leader.LeafScale = 1f;
             tree.Append(leader);
 
-            // #2 wild twig: lateral child (7 draws) at the extreme angle Mean + Spread.
-            // BALANCE §1.1: interpretation — u2/u3 are drawn but unused (fixed angle); u4 picks the side, u5 length, u6/u7 curvature.
-            ShootDraws twigDraws = ShootDraws.Next(rng);
-            NodeData twig = ShootBuilder.Build(tree, 0, in twigDraws, config, species, genome.BendBias,
-                species.BranchAngleMeanDeg + species.BranchAngleSpreadDeg);
-            twig.Length = config.SaplingTwigLength;
-            twig.Thickness = Math.Min(config.SaplingTwigThickness, GrowthFormulas.MaxThicknessAt(twig.Depth, config));
-            twig.Status = NodeStatus.Growing;
-            twig.AgeDays = config.SaplingTwigAgeDays;
-            twig.LeafScale = 1f;
-            tree.Append(twig);
+            // #2 wild twig: 8 draws are consumed to keep the stream layout, none is used (BALANCE §1.2.8).
+            ShootDraws.Next(rng);
+            tree.Append(ShootBuilder.BuildSaplingTwig(tree, config));
 
             tree.MarkChanged();
             return tree;

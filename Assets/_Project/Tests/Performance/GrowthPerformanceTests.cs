@@ -6,7 +6,7 @@ using Unity.PerformanceTesting;
 
 namespace PocketArbor.Performance.Tests
 {
-    /// <summary>DailyStep cost (PA-102). Measured, no hard threshold yet.</summary>
+    /// <summary>DailyStep cost (PA-102, PA-102S AC17: ≤ 2× PA-102 ≈ 14 µs) and TreeShapeAnalysis. Measured, no hard threshold yet.</summary>
     public sealed class GrowthPerformanceTests
     {
         const double Wet = 0.5;
@@ -66,6 +66,21 @@ namespace PocketArbor.Performance.Tests
                 })
                 .WarmupCount(10)
                 .MeasurementCount(50)
+                .GC()
+                .Run();
+        }
+
+        [Test, Performance]
+        public void TreeShapeAnalysis_200Nodes()
+        {
+            var sim = CreateSimulator();
+            var tree = GrowTree(sim, 150);
+            var shape = new TreeShapeAnalysis();
+            var species = SpeciesConfig.Kuromatsu();
+            Measure.Method(() => shape.Analyze(tree, sim.Config, species))
+                .WarmupCount(10)
+                .MeasurementCount(50)
+                .IterationsPerMeasurement(10)
                 .GC()
                 .Run();
         }

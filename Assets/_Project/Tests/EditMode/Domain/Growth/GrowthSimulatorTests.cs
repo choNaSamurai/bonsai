@@ -194,6 +194,9 @@ namespace PocketArbor.Domain.Tests.Growth
                 double ds = GrowthFormulas.DepthScale(before.Nodes[other].Depth, config);
                 double expectedOther = GrowthFormulas.Thicken(before.Nodes[other].Thickness, config.MaxThickness * ds,
                     config.ThickeningRate, 1.0, ds, 1.0);
+                // ⚑ BALANCE §1.2.2: plus the taper ceiling from the (already updated) trunk.
+                double cap = GrowthFormulas.ThicknessCap(tree.Nodes[0].Thickness, before.Nodes[other].AttachT, true, config);
+                expectedOther = Math.Min(expectedOther, Math.Max(before.Nodes[other].Thickness, cap));
                 Assert.AreEqual(expectedOther, tree.Nodes[other].Thickness, 1e-12, "non-trunk nodes are not boosted");
             }
 
@@ -245,49 +248,17 @@ namespace PocketArbor.Domain.Tests.Growth
 
         static void AssertShootAngles(TreeGraph tree, GrowthConfig config, SpeciesConfig species, double bend)
         {
-            var nodes = tree.Nodes;
-            double maxWorld = config.MaxShootWorldAngleDeg * GrowthFormulas.DegToRad;
-            double lo = (species.BranchAngleMeanDeg - species.BranchAngleSpreadDeg) * GrowthFormulas.DegToRad - 1e-12;
-            double hi = (species.BranchAngleMeanDeg + species.BranchAngleSpreadDeg) * GrowthFormulas.DegToRad + 1e-12;
-            double apicalCenter = bend * config.ApicalBendScaleDeg * GrowthFormulas.DegToRad;
-            double apicalJitter = config.ApicalAngleJitterDeg * GrowthFormulas.DegToRad + 1e-12;
-            var lastSide = new sbyte[nodes.Length];
-            var apicalCount = new int[nodes.Length];
-
-            for (int i = 1; i < nodes.Length; i++)
-            {
-                var n = nodes[i];
-                Assert.AreEqual(n.BaseAngle, n.CurrentAngle, "no wire in growth");
-                bool clamped = Math.Abs(Math.Abs(tree.WorldAngle(i)) - maxWorld) < 1e-9;
-                if (n.BranchSide == 0)
-                {
-                    apicalCount[n.ParentIndex]++;
-                    Assert.LessOrEqual(apicalCount[n.ParentIndex], 1, "single apical child");
-                    if (!clamped) Assert.That(n.BaseAngle, Is.InRange(apicalCenter - apicalJitter, apicalCenter + apicalJitter), "apical angle " + i);
-                }
-                else
-                {
-                    if (!clamped)
-                    {
-                        Assert.That(Math.Abs(n.BaseAngle), Is.InRange(lo, hi), "lateral angle " + i);
-                        Assert.AreEqual(n.BranchSide, Math.Sign(n.BaseAngle), "lateral side " + i);
-                    }
-                    if (lastSide[n.ParentIndex] != 0) Assert.AreEqual(-lastSide[n.ParentIndex], n.BranchSide, "alternating sides " + i);
-                    lastSide[n.ParentIndex] = n.BranchSide;
-                }
-                Assert.LessOrEqual(tree.ChildCount(i), 3);
-            }
+            ShapeAsserts.AssertShootAngles(tree, config, species);
         }
 
         static void AssertTipsNeverBelowParent(TreeGraph tree)
         {
-            var nodes = tree.Nodes;
-            var tipY = new double[nodes.Length];
-            for (int i = 0; i < nodes.Length; i++)
+            // Children start on the parent at AttachT (BALANCE §1.2.1): chord geometry, pot lip at y = 0 (Y-up).
+            ShapeMetrics.Heights(tree, out double[] baseY, out double[] tipY);
+            for (int i = 0; i < tree.Count; i++)
             {
-                double baseY = nodes[i].ParentIndex >= 0 ? tipY[nodes[i].ParentIndex] : 0.0; // pot lip at y = 0
-                tipY[i] = baseY + nodes[i].Length * Math.Cos(tree.WorldAngle(i));
-                Assert.GreaterOrEqual(tipY[i], baseY - 1e-9, "Pot Lip (Y-up) at " + i);
+                Assert.GreaterOrEqual(baseY[i], -1e-9, "base above Pot Lip at " + i);
+                Assert.GreaterOrEqual(tipY[i], baseY[i] - 1e-9, "Pot Lip (Y-up) at " + i);
             }
         }
 
@@ -376,6 +347,33 @@ namespace PocketArbor.Domain.Tests.Growth
             var expected = online.ToSnapshot();
             Assert.IsTrue(expected.BitwiseEquals(batch.ToSnapshot()), "batch");
             Assert.IsTrue(expected.BitwiseEquals(resumed.ToSnapshot()), "chunked with saves");
+        }
+
+        // ---- RNG layout (BALANCE §1.2.9, AC14) -----------------------------------------------------
+
+        [Test]
+        public void DailyStep_EveryShoot_ConsumesExactlyEightDraws()
+        {
+            var config = GrowthConfig.CreateDefault();
+            var sim = GrowthTestKit.Simulator(config);
+            foreach (SpeciesId species in new[] { SpeciesId.Kuromatsu, SpeciesId.Momiji, SpeciesId.Yamazakura })
+            {
+                var tree = GrowthTestKit.PostOnboarding(GrowthTestKit.FixtureSeed, species);
+                int shootDays = 0;
+                for (int day = 1; day <= 90; day++)
+                {
+                    int before = tree.Count;
+                    GrowthTestKit.RunDays(sim, tree, 1);
+                    int shoots = tree.Count - before;
+                    if (shoots == 0) continue;
+                    shootDays++;
+
+                    var expected = new PocketArbor.Domain.Random.Pcg32(tree.Genome.Seed, (ulong)tree.Growth.GrowthDayIndex);
+                    for (int d = 0; d < shoots * 8; d++) expected.NextUInt();
+                    Assert.AreEqual(expected.State, sim.Rng.State, species + " day " + day + ": " + shoots + " shoot(s) × 8 draws");
+                }
+                Assert.Greater(shootDays, 50);
+            }
         }
 
         // ---- Allocations -------------------------------------------------------------------------

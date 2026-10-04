@@ -13,6 +13,7 @@ namespace PocketArbor.DevTools.GrowthPreview
     public sealed class GrowthPreviewController : MonoBehaviour
     {
         static readonly string[] SpeciesNames = { "Kuromatsu", "Momiji", "Yamazakura" };
+        static readonly string[] ModeNames = { "Wild", "Styled" };
         static readonly string[] ShaderCandidates =
         {
             "Universal Render Pipeline/2D/Sprite-Unlit-Default",
@@ -28,6 +29,7 @@ namespace PocketArbor.DevTools.GrowthPreview
         [SerializeField, Range(-10f, 45f)] float _temperatureC = 25f;
         [SerializeField, Range(0f, 1f)] float _moisture = 0.5f;
         [SerializeField] bool _onboardingCut;
+        [SerializeField, Tooltip("PA-102S: PruneToStyle on days 20/30/…/70")] bool _styled;
         [SerializeField] float _framePadding = 0.12f;
 
         GrowthPreviewModel _model;
@@ -76,6 +78,20 @@ namespace PocketArbor.DevTools.GrowthPreview
             Refresh();
         }
 
+        public bool Styled => _styled;
+
+        /// <summary>PA-102S: Wild (no pruning) or Styled (PruneToStyle on GrowthPreviewModel.StyleDays).</summary>
+        public void SetStyled(bool styled)
+        {
+            _styled = styled;
+            _paramsDirty = true;
+            Refresh();
+        }
+
+        public float TaperRatio => _builder != null ? _builder.LastTaperRatio : 0f;
+        public int PadCount => _builder != null ? _builder.LastPadCount : 0;
+        public TreePreviewMeshBuilder Builder => _builder;
+
         public void SetWeather(float temperatureC, float moisture)
         {
             _temperatureC = temperatureC;
@@ -102,6 +118,7 @@ namespace PocketArbor.DevTools.GrowthPreview
             if (_paramsDirty)
             {
                 _model.SetParameters(_species, _seed, _vigor, _bendBias, _temperatureC, _moisture, _onboardingCut);
+                _model.SetStyled(_styled);
                 _paramsDirty = false;
                 _shownDay = -1;
             }
@@ -109,7 +126,7 @@ namespace PocketArbor.DevTools.GrowthPreview
 
             TreeGraph tree = _model.GetTree(_day);
             _nodeCount = tree.Count;
-            Bounds bounds = _builder.Build(tree, _mesh);
+            Bounds bounds = _builder.Build(tree, _mesh, _model.Config, _model.SpeciesConfig);
             FrameCamera(bounds);
             _shownDay = _day;
             _shownCuts = _model.CutCount;
@@ -187,7 +204,7 @@ namespace PocketArbor.DevTools.GrowthPreview
             float width = Mathf.Min(320f, Screen.width / scale * 0.3f);
 
             GUILayout.BeginArea(new Rect(10f, 10f, width, Screen.height / scale - 20f), GUI.skin.box);
-            GUILayout.Label("Growth Preview (PA-102V, dev only)");
+            GUILayout.Label("Growth Preview (PA-102V/102S, dev only)");
 
             int day = Mathf.RoundToInt(LabeledSlider("Day", _day, 0f, GrowthPreviewModel.MaxPreviewDay, "0"));
             if (day != _day) _day = day;
@@ -235,6 +252,13 @@ namespace PocketArbor.DevTools.GrowthPreview
                 _paramsDirty = true;
             }
 
+            int mode = GUILayout.Toolbar(_styled ? 1 : 0, ModeNames);
+            if (mode != (_styled ? 1 : 0))
+            {
+                _styled = mode == 1;
+                _paramsDirty = true;
+            }
+
             GUILayout.Space(6f);
             if (GUILayout.Button("Cut random branch (at this day)")) CutRandomBranch();
 
@@ -247,6 +271,7 @@ namespace PocketArbor.DevTools.GrowthPreview
             TreeSnapshot snapshot = _model.GetDay(_day);
             GUILayout.Label("Trunk thickness: " + snapshot.Nodes[0].Thickness.ToString("0.00") + "  ShootCredit: " + snapshot.Growth.ShootCredit.ToString("0.00"));
             GUILayout.Label("Recorded cuts: " + _model.CutCount);
+            GUILayout.Label("Pads: " + _builder.LastPadCount + "  Taper (Nebari base / 2/3 h): " + _builder.LastTaperRatio.ToString("0.0"));
             if (!string.IsNullOrEmpty(_status)) GUILayout.Label(_status);
             GUILayout.EndArea();
         }

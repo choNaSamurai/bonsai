@@ -1,176 +1,516 @@
 using System;
 using System.Collections.Generic;
+using PocketArbor.Domain.Growth;
 using PocketArbor.Domain.Tree;
 using UnityEngine;
 
 namespace PocketArbor.DevTools.GrowthPreview
 {
     /// <summary>
-    /// Debug mesh of a tree (PA-102V, not the PA-103 renderer): pot + Pot Lip line, branches as tapered cubic
-    /// Bezier strips with round joints, leaves and buds as discs. One mesh, vertex colors, drawn in index order.
-    /// World: 1 unit = 1 biological unit, Pot Lip at y = 0 (Unity Y-up), positive angle = counter-clockwise.
+    /// Debug mesh of a tree (PA-102V/PA-102S preview, not the PA-103 renderer). BALANCE §1.2 render rules, simplified:
+    /// every axis (chain of apical children) is a G1/C1 spline of cubic Beziers through its joints (tangent = bisector of
+    /// adjacent chords), Curvature added as a bump 12t²(1−t)² that keeps the joint tangents; a lateral starts on its
+    /// parent's curve at AttachT; width w(t) = lerp(Thickness, tipWidth, t) with JointBlend; Nebari roots + base flare;
+    /// foliage only on IsLeafy nodes, as puffs merged into flat-bottomed, domed pad silhouettes with a darker underside.
+    /// World: 1 unit = 1 biological unit, soil / Pot Lip at y = 0 (Unity Y-up), positive angle = counter-clockwise.
+    /// One mesh, vertex colours, drawn in append order. Dev-only: allocations are fine.
     /// </summary>
     public sealed class TreePreviewMeshBuilder
     {
-        /// <summary>BALANCE §1 proposal for PA-103: control-point offset = Curvature × 0.25 × Length.</summary>
-        public const float CurvatureOffsetRatio = 0.25f;
-
-        const int BezierSegments = 10;
-        const int DiscSegments = 14;
-        const float LeafRadius = 5.5f;
+        const int SegmentSamples = 12;
+        const int DiscSegments = 18;
         const float BudRadius = 1.4f;
-        const float PotWidth = 70f;
-        const float PotHeight = 22f;
-        const float PotLipOverhang = 5f;
-        const float PotLipThickness = 1.2f;
+        const float PotLipOverhang = 4f;
+        const float PotLipThickness = 1.4f;
+        const float PuffLift = 0.35f;
 
         // Dev colours (bark/pot are placeholders; leaf colours are BALANCE §3).
         static readonly Color32 Bark = new Color32(0x5D, 0x43, 0x37, 0xFF);
-        static readonly Color32 Pot = new Color32(0xA8, 0x6B, 0x4A, 0xFF);
-        static readonly Color32 PotLip = new Color32(0x4A, 0x35, 0x25, 0xFF);
-        static readonly Color32 Soil = new Color32(0x63, 0x48, 0x32, 0xFF);
+        static readonly Color32 BarkDark = new Color32(0x4A, 0x34, 0x2A, 0xFF);
+        static readonly Color32 Pot = new Color32(0xB0, 0x6E, 0x4C, 0xFF);
+        static readonly Color32 PotLip = new Color32(0x8E, 0x55, 0x3A, 0xFF);
+        static readonly Color32 Soil = new Color32(0x4F, 0x5E, 0x2E, 0xFF); // moss
         static readonly Color32 BudColor = new Color32(0xC9, 0xD8, 0x6B, 0xFF);
 
-        readonly List<Vector3> _vertices = new List<Vector3>(16384);
-        readonly List<Color32> _colors = new List<Color32>(16384);
-        readonly List<int> _indices = new List<int>(49152);
-        Vector2[] _tips = new Vector2[TreeGraph.Capacity];
-        Vector2[] _dirs = new Vector2[TreeGraph.Capacity];
+        readonly TreeRenderConfig _render = new TreeRenderConfig();
+        readonly TreeShapeAnalysis _shape = new TreeShapeAnalysis();
+        readonly List<Vector3> _vertices = new List<Vector3>(32768);
+        readonly List<Color32> _colors = new List<Color32>(32768);
+        readonly List<int> _indices = new List<int>(98304);
+        readonly List<Vector4> _puffs = new List<Vector4>(256); // cx, cy, rx, ry
+        readonly List<Vector2> _trunkSamples = new List<Vector2>(256); // (y, width) along the trunk chain
+
+        readonly Vector2[] _dir = new Vector2[TreeGraph.Capacity];
+        readonly Vector2[] _base = new Vector2[TreeGraph.Capacity];
+        readonly Vector2[] _tip = new Vector2[TreeGraph.Capacity];
+        readonly Vector2[] _tanBase = new Vector2[TreeGraph.Capacity];
+        readonly Vector2[] _tanTip = new Vector2[TreeGraph.Capacity];
+        readonly float[] _tipWidth = new float[TreeGraph.Capacity];
+
+        NodeData[] _nodes = new NodeData[TreeGraph.Capacity];
+        int _count;
         bool _linear;
+        float _th0;
+        float _flare;
+
+        public TreeRenderConfig Render => _render;
+
+        /// <summary>AC20: base width with Nebari flare / trunk width at 2/3 of the trunk-chain height (last build).</summary>
+        public float LastTaperRatio { get; private set; }
+
+        public int LastPadCount { get; private set; }
+
+        /// <summary>PA-102S proportions (last build, units): tree height above the Pot Lip incl. foliage.</summary>
+        public float LastHeight { get; private set; }
+
+        /// <summary>Crown width: x-extent of bark + foliage (roots and pot excluded).</summary>
+        public float LastCrownWidth { get; private set; }
+
+        /// <summary>Trunk base width: Thickness(#0) and with the Nebari flare th0·(1 + F).</summary>
+        public float LastTrunkBase { get; private set; }
+        public float LastTrunkBaseFlared { get; private set; }
+
+        /// <summary>Preview pot width (a prototype choice: clamp(0.62·crown, 60, 170) — the model has no pot size).</summary>
+        public float LastPotWidth { get; private set; }
 
         public static Color32 LeafColor(SpeciesId species)
         {
             switch (species)
             {
-                case SpeciesId.Momiji: return new Color32(0x5C, 0x8A, 0x42, 0xE6);    // #5C8A42
-                case SpeciesId.Yamazakura: return new Color32(0x6A, 0x99, 0x4E, 0xE6); // #6A994E
-                default: return new Color32(0x2E, 0x4F, 0x2D, 0xE6);                  // #2E4F2D Kuromatsu
+                case SpeciesId.Momiji: return new Color32(0x5C, 0x8A, 0x42, 0xFF);    // #5C8A42
+                case SpeciesId.Yamazakura: return new Color32(0x6A, 0x99, 0x4E, 0xFF); // #6A994E
+                default: return new Color32(0x2E, 0x4F, 0x2D, 0xFF);                  // #2E4F2D Kuromatsu
             }
         }
 
         /// <summary>Fills <paramref name="mesh"/>; returns world bounds of everything drawn.</summary>
-        public Bounds Build(TreeGraph tree, Mesh mesh)
+        public Bounds Build(TreeGraph tree, Mesh mesh, GrowthConfig growth, SpeciesConfig species)
         {
             _vertices.Clear();
             _colors.Clear();
             _indices.Clear();
             _linear = QualitySettings.activeColorSpace == ColorSpace.Linear;
 
-            ReadOnlySpan<NodeData> nodes = tree.Nodes;
-            ComputeFrames(tree, nodes);
+            ReadOnlySpan<NodeData> span = tree.Nodes;
+            _count = span.Length;
+            span.CopyTo(_nodes);
+            _shape.Analyze(span, growth.TrunkChainSegments, species.PadDepth);
+            LastPadCount = _shape.PadCount;
 
-            for (int i = 0; i < nodes.Length; i++) AddBranch(nodes, i);
+            _th0 = (float)_nodes[0].Thickness;
+            float flareRange = (float)(growth.MaxThickness - growth.TrunkInitialThickness);
+            _flare = _render.NebariFlareMin + _render.NebariFlareGain
+                * Mathf.Clamp01(flareRange > 0f ? (_th0 - (float)growth.TrunkInitialThickness) / flareRange : 0f);
 
-            // Pot body after branches: it hides the trunk base, nothing is drawn below the Pot Lip.
-            AddRect(new Vector2(-PotWidth * 0.5f, -PotHeight), new Vector2(PotWidth * 0.5f, 0f), Pot);
-            AddRect(new Vector2(-PotWidth * 0.5f + 2f, -2.5f), new Vector2(PotWidth * 0.5f - 2f, 0f), Soil);
+            ComputeGeometry();
+            FoliageConfig foliage = FoliageConfig.For(tree.Genome.Species);
+            Rect treeRect = TreeExtents(foliage);
 
-            Color32 leaf = LeafColor(tree.Genome.Species);
-            for (int i = 0; i < nodes.Length; i++)
+            // Pot first (everything else overdraws it), sized to the crown.
+            float potWidth = Mathf.Clamp(treeRect.width * 0.62f, 60f, 170f);
+            float potHeight = potWidth * 0.26f;
+            AddRect(new Vector2(-potWidth * 0.5f, -potHeight), new Vector2(potWidth * 0.5f, 0f), Pot);
+            AddRect(new Vector2(-potWidth * 0.5f - PotLipOverhang, -PotLipThickness * 2f), new Vector2(potWidth * 0.5f + PotLipOverhang, 0f), PotLip);
+            AddRect(new Vector2(-potWidth * 0.5f + 1.5f, -0.6f), new Vector2(potWidth * 0.5f - 1.5f, 1.2f), Soil);
+
+            LastPotWidth = potWidth;
+            AddNebariRoots(tree.Genome.Seed, growth);
+            int treeStart = _vertices.Count;
+            _trunkSamples.Clear();
+            for (int i = 0; i < _count; i++) AddBranch(i);
+            LastTaperRatio = MeasureTaper();
+
+            AddFoliage(tree.Genome.Species, foliage, growth);
+
+            for (int i = 0; i < _count; i++)
             {
-                if (!nodes[i].HasLeaves || nodes[i].LeafScale <= 0f) continue;
-                Vector2 tip = _tips[i];
-                Vector2 mid = BasePoint(nodes, i) + _dirs[i] * (float)nodes[i].Length * 0.55f;
-                AddDisc(tip, LeafRadius * nodes[i].LeafScale, leaf);
-                AddDisc(mid, LeafRadius * 0.7f * nodes[i].LeafScale, leaf);
+                if (_nodes[i].Status == NodeStatus.Bud) AddEllipse(_tip[i], BudRadius, BudRadius, BudColor, BudColor);
             }
 
-            for (int i = 0; i < nodes.Length; i++)
+            float minX = float.MaxValue, maxX = float.MinValue, maxY = 0f;
+            for (int v = treeStart; v < _vertices.Count; v++)
             {
-                if (nodes[i].Status == NodeStatus.Bud) AddDisc(_tips[i], BudRadius, BudColor);
+                Vector3 p = _vertices[v];
+                minX = Mathf.Min(minX, p.x);
+                maxX = Mathf.Max(maxX, p.x);
+                maxY = Mathf.Max(maxY, p.y);
             }
-
-            // Pot Lip line on top of everything: nothing grown may appear below it.
-            AddRect(new Vector2(-PotWidth * 0.5f - PotLipOverhang, -PotLipThickness * 0.5f),
-                new Vector2(PotWidth * 0.5f + PotLipOverhang, PotLipThickness * 0.5f), PotLip);
+            LastHeight = maxY;
+            LastCrownWidth = maxX > minX ? maxX - minX : 0f;
+            LastTrunkBase = _th0;
+            LastTrunkBaseFlared = _th0 * (1f + _flare);
 
             mesh.Clear();
             mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
             mesh.SetVertices(_vertices);
             mesh.SetColors(_colors);
             mesh.SetTriangles(_indices, 0, true);
-
-            Bounds bounds = mesh.bounds;
-            return bounds;
+            return mesh.bounds;
         }
 
-        void ComputeFrames(TreeGraph tree, ReadOnlySpan<NodeData> nodes)
+        // ---- Geometry ---------------------------------------------------------------------------------
+
+        void ComputeGeometry()
         {
-            for (int i = 0; i < nodes.Length; i++)
+            var world = new double[_count];
+            for (int i = 0; i < _count; i++)
             {
-                float world = (float)tree.WorldAngle(i);
-                _dirs[i] = new Vector2(-Mathf.Sin(world), Mathf.Cos(world));
-                _tips[i] = BasePoint(nodes, i) + _dirs[i] * (float)nodes[i].Length;
+                world[i] = (_nodes[i].ParentIndex >= 0 ? world[_nodes[i].ParentIndex] : 0.0) + _nodes[i].CurrentAngle;
+                _dir[i] = new Vector2(-Mathf.Sin((float)world[i]), Mathf.Cos((float)world[i]));
+            }
+
+            // Tangents depend only on directions: joints of an axis use the bisector of the adjacent chords.
+            for (int i = 0; i < _count; i++)
+            {
+                int parent = _nodes[i].ParentIndex;
+                bool axisRoot = parent < 0 || _nodes[i].BranchSide != 0;
+                _tanBase[i] = axisRoot ? _dir[i] : Bisector(_dir[parent], _dir[i]);
+                int apical = _shape.ApicalChild(i);
+                _tanTip[i] = apical >= 0 ? Bisector(_dir[i], _dir[apical]) : _dir[i];
+
+                float th = (float)_nodes[i].Thickness;
+                _tipWidth[i] = apical >= 0 ? Mathf.Max((float)_nodes[apical].Thickness, th * _render.TerminalTipRatio) : th * _render.TerminalTipRatio;
+            }
+
+            // Positions in index order: a lateral starts on its parent's curve at AttachT (BALANCE §1.2.1).
+            for (int i = 0; i < _count; i++)
+            {
+                int parent = _nodes[i].ParentIndex;
+                if (parent < 0) _base[i] = Vector2.zero;
+                else if (_nodes[i].BranchSide == 0) _base[i] = _tip[parent];
+                else _base[i] = Eval(parent, (float)_nodes[i].AttachT);
+                _tip[i] = _base[i] + _dir[i] * (float)_nodes[i].Length;
             }
         }
 
-        Vector2 BasePoint(ReadOnlySpan<NodeData> nodes, int i) =>
-            nodes[i].ParentIndex >= 0 ? _tips[nodes[i].ParentIndex] : Vector2.zero;
-
-        void AddBranch(ReadOnlySpan<NodeData> nodes, int i)
+        static Vector2 Bisector(Vector2 a, Vector2 b)
         {
-            NodeData node = nodes[i];
-            Vector2 p0 = BasePoint(nodes, i);
-            Vector2 p3 = _tips[i];
-            Vector2 dir = _dirs[i];
-            Vector2 normal = new Vector2(-dir.y, dir.x);
-            float length = (float)node.Length;
-            Vector2 offset = normal * ((float)node.Curvature * CurvatureOffsetRatio * length);
-            Vector2 p1 = p0 + dir * (length / 3f) + offset;
-            Vector2 p2 = p0 + dir * (length * 2f / 3f) + offset;
+            Vector2 sum = a + b;
+            return sum.sqrMagnitude > 1e-8f ? sum.normalized : b;
+        }
 
-            float baseWidth = Mathf.Max(0.3f, (float)node.Thickness);
-            float tipWidth = baseWidth * 0.6f;
-            for (int c = i + 1; c < nodes.Length; c++)
+        Vector2 Eval(int i, float t)
+        {
+            float length = (float)_nodes[i].Length;
+            Vector2 p0 = _base[i];
+            Vector2 p3 = _tip[i];
+            Vector2 p1 = p0 + _tanBase[i] * (length / 3f);
+            Vector2 p2 = p3 - _tanTip[i] * (length / 3f);
+            float u = 1f - t;
+            Vector2 point = u * u * u * p0 + 3f * u * u * t * p1 + 3f * u * t * t * p2 + t * t * t * p3;
+            Vector2 normal = new Vector2(-_dir[i].y, _dir[i].x);
+            // Same mid-span offset as the PA-102V Bezier (0.75·c) but with zero slope at the joints → C1 kept.
+            float bump = 12f * t * t * u * u;
+            return point + normal * ((float)_nodes[i].Curvature * _render.CurvatureOffsetRatio * length * bump);
+        }
+
+        float Width(int i, float t, float y)
+        {
+            NodeData node = _nodes[i];
+            float width = Mathf.Lerp((float)node.Thickness, _tipWidth[i], t);
+            if (node.ParentIndex >= 0 && node.BranchSide == 0 && t < _render.JointBlend && _render.JointBlend > 0f)
             {
-                if (nodes[c].ParentIndex == i) tipWidth = Mathf.Max(tipWidth, (float)nodes[c].Thickness);
+                float s = Mathf.SmoothStep(0f, 1f, t / _render.JointBlend);
+                width = Mathf.Lerp(_tipWidth[node.ParentIndex], width, s);
             }
-            tipWidth = Mathf.Min(tipWidth, baseWidth);
+            if (_shape.Order(i) == 0 && _th0 > 0f)
+            {
+                // Nebari base flare (BALANCE §1.2.4).
+                width *= 1f + _flare * Mathf.Exp(-Mathf.Max(0f, y) / (_render.NebariFlareHeightRatio * _th0));
+            }
+            return Mathf.Max(0.3f, width);
+        }
 
+        Rect TreeExtents(FoliageConfig foliage)
+        {
+            float minX = -10f, maxX = 10f;
+            float pad = foliage.PuffRadius * foliage.PuffWidthRatio;
+            for (int i = 0; i < _count; i++)
+            {
+                minX = Mathf.Min(minX, Mathf.Min(_base[i].x, _tip[i].x) - pad);
+                maxX = Mathf.Max(maxX, Mathf.Max(_base[i].x, _tip[i].x) + pad);
+            }
+            return Rect.MinMaxRect(minX, 0f, maxX, 1f);
+        }
+
+        // ---- Bark -------------------------------------------------------------------------------------
+
+        void AddBranch(int i)
+        {
+            NodeData node = _nodes[i];
+            bool trunkChain = _shape.IsTrunkChain(i);
             int start = _vertices.Count;
-            for (int s = 0; s <= BezierSegments; s++)
+            Vector2 previous = Eval(i, 0f);
+            for (int s = 0; s <= SegmentSamples; s++)
             {
-                float t = s / (float)BezierSegments;
-                Vector2 point = Bezier(p0, p1, p2, p3, t);
-                Vector2 tangent = BezierTangent(p0, p1, p2, p3, t);
-                if (tangent.sqrMagnitude < 1e-8f) tangent = dir;
-                tangent.Normalize();
-                Vector2 side = new Vector2(-tangent.y, tangent.x) * (Mathf.Lerp(baseWidth, tipWidth, t) * 0.5f);
+                float t = s / (float)SegmentSamples;
+                Vector2 point = Eval(i, t);
+                Vector2 ahead = Eval(i, Mathf.Min(1f, t + 0.01f));
+                Vector2 behind = Eval(i, Mathf.Max(0f, t - 0.01f));
+                Vector2 tangent = ahead - behind;
+                tangent = tangent.sqrMagnitude > 1e-10f ? tangent.normalized : _dir[i];
+                float width = Width(i, t, point.y);
+                Vector2 side = new Vector2(-tangent.y, tangent.x) * (width * 0.5f);
+                // Light from the left: the right flank is a shade darker.
                 AddVertex(point + side, Bark);
-                AddVertex(point - side, Bark);
+                AddVertex(point - side, BarkDark);
+                if (trunkChain) _trunkSamples.Add(new Vector2(point.y, width));
+                previous = point;
             }
-            for (int s = 0; s < BezierSegments; s++)
+            for (int s = 0; s < SegmentSamples; s++)
             {
                 int a = start + s * 2;
                 _indices.Add(a); _indices.Add(a + 1); _indices.Add(a + 2);
                 _indices.Add(a + 1); _indices.Add(a + 3); _indices.Add(a + 2);
             }
 
-            if (node.ParentIndex >= 0) AddDisc(p0, baseWidth * 0.5f, Bark); // round joint
-            AddDisc(p3, tipWidth * 0.5f, Bark);
+            if (node.BranchSide != 0) AddEllipse(_base[i], (float)node.Thickness * 0.5f, (float)node.Thickness * 0.5f, Bark, Bark); // collar
+            if (_shape.ApicalChild(i) < 0) AddEllipse(previous, _tipWidth[i] * 0.5f, _tipWidth[i] * 0.5f, Bark, Bark);
         }
 
-        static Vector2 Bezier(Vector2 p0, Vector2 p1, Vector2 p2, Vector2 p3, float t)
+        float MeasureTaper()
         {
-            float u = 1f - t;
-            return u * u * u * p0 + 3f * u * u * t * p1 + 3f * u * t * t * p2 + t * t * t * p3;
+            if (_trunkSamples.Count < 2) return 0f;
+            float top = 0f;
+            for (int s = 0; s < _trunkSamples.Count; s++) top = Mathf.Max(top, _trunkSamples[s].x);
+            float target = top * 2f / 3f;
+            float baseWidth = _trunkSamples[0].y;
+            for (int s = 1; s < _trunkSamples.Count; s++)
+            {
+                Vector2 a = _trunkSamples[s - 1];
+                Vector2 b = _trunkSamples[s];
+                if ((a.x - target) * (b.x - target) > 0f || Mathf.Approximately(a.x, b.x)) continue;
+                float width = Mathf.Lerp(a.y, b.y, (target - a.x) / (b.x - a.x));
+                return width > 0f ? baseWidth / width : 0f;
+            }
+            return 0f;
         }
 
-        static Vector2 BezierTangent(Vector2 p0, Vector2 p1, Vector2 p2, Vector2 p3, float t)
+        // ---- Nebari roots (BALANCE §1.2.4) --------------------------------------------------------------
+
+        void AddNebariRoots(uint seed, GrowthConfig growth)
         {
-            float u = 1f - t;
-            return 3f * u * u * (p1 - p0) + 6f * u * t * (p2 - p1) + 3f * t * t * (p3 - p2);
+            float th0 = _th0;
+            int count = Mathf.Clamp(Mathf.RoundToInt(_render.NebariRootsMin + (th0 - (float)growth.TrunkInitialThickness) / _render.NebariThicknessPerRoot),
+                _render.NebariRootsMin, _render.NebariRootsMax);
+            int trunkId = _nodes[0].Id;
+            for (int r = 0; r < count; r++)
+            {
+                float frac = count == 1 ? 0.5f : r / (float)(count - 1);
+                float angle = Mathf.Lerp(-_render.NebariFanDeg, _render.NebariFanDeg, frac)
+                    + _render.NebariFanJitterDeg * (2f * Hash01(seed, trunkId, 101u + (uint)r) - 1f);
+                float h = Hash01(seed, trunkId, 211u + (uint)r);
+                float lengthFactor = (r & 1) == 0
+                    ? Mathf.Lerp(_render.NebariRootLengthMin, _render.NebariRootLengthMax, 0.6f + 0.4f * h)
+                    : Mathf.Lerp(_render.NebariRootLengthMin, _render.NebariRootLengthMax, 0.4f * h);
+                float length = th0 * lengthFactor;
+                float thickness = _render.NebariRootThicknessRatio * th0;
+                float sin = Mathf.Sin(angle * Mathf.Deg2Rad);
+
+                // Roots leave the flared base above the soil and arch down onto it (Y ∈ [soil, soil + 0.35·th0]).
+                Vector2 start = new Vector2(sin * th0 * 0.45f, thickness * 1.1f);
+                Vector2 end = new Vector2(start.x + sin * length, -0.3f);
+                Vector2 control = new Vector2(Mathf.Lerp(start.x, end.x, 0.25f), thickness * 0.75f);
+                AddTaperedQuadratic(start, control, end, thickness, Bark, BarkDark);
+            }
         }
 
-        void AddDisc(Vector2 center, float radius, Color32 color)
+        void AddTaperedQuadratic(Vector2 a, Vector2 c, Vector2 b, float startWidth, Color32 top, Color32 bottom)
         {
-            if (radius <= 0f) return;
+            const int samples = 10;
             int start = _vertices.Count;
-            AddVertex(center, color);
+            for (int s = 0; s <= samples; s++)
+            {
+                float t = s / (float)samples;
+                float u = 1f - t;
+                Vector2 point = u * u * a + 2f * u * t * c + t * t * b;
+                Vector2 tangent = 2f * u * (c - a) + 2f * t * (b - c);
+                tangent = tangent.sqrMagnitude > 1e-8f ? tangent.normalized : Vector2.right;
+                Vector2 side = new Vector2(-tangent.y, tangent.x) * (startWidth * 0.5f * (1f - t * 0.92f));
+                AddVertex(point + side, top);
+                AddVertex(point - side, bottom);
+            }
+            for (int s = 0; s < samples; s++)
+            {
+                int i = start + s * 2;
+                _indices.Add(i); _indices.Add(i + 1); _indices.Add(i + 2);
+                _indices.Add(i + 1); _indices.Add(i + 3); _indices.Add(i + 2);
+            }
+        }
+
+        /// <summary>Render hash (randomSeed, Id, salt) → [0, 1) (BALANCE §1.2.9 / TD-018: not the PCG stream).</summary>
+        static float Hash01(uint seed, int id, uint salt)
+        {
+            unchecked
+            {
+                uint h = seed ^ (0x9E3779B9u * (uint)(id + 1)) ^ (salt * 0x85EBCA6Bu);
+                h ^= h >> 16;
+                h *= 0x7FEB352Du;
+                h ^= h >> 15;
+                h *= 0x846CA68Bu;
+                h ^= h >> 16;
+                return (h >> 8) * (1f / 16777216f);
+            }
+        }
+
+        // ---- Foliage pads (BALANCE §1.2.5) --------------------------------------------------------------
+
+        void AddFoliage(SpeciesId species, FoliageConfig foliage, GrowthConfig growth)
+        {
+            Color32 leaf = LeafColor(species);
+            Color32 shade = Scale(leaf, 1f - foliage.PadUndersideShade);
+            Color32 light = Scale(leaf, 1.06f);
+            Color32 fresh = Scale(leaf, 1f + foliage.FreshTintValue);
+
+            for (int root = 0; root < _count; root++)
+            {
+                if (!_shape.IsLeafy(root) || _shape.PadId(root) != root) continue;
+                _puffs.Clear();
+                for (int i = root; i < _count; i++)
+                {
+                    if (_shape.PadId(i) != root) continue;
+                    float r = foliage.PuffRadius * _nodes[i].LeafScale;
+                    if (r <= 0.2f) continue;
+                    float rx = r * foliage.PuffWidthRatio;
+                    float ry = rx * foliage.PadFlatten;
+                    int puffs = Mathf.Max(1, foliage.PuffsPerNode);
+                    for (int k = 1; k <= puffs; k++)
+                    {
+                        Vector2 c = Eval(i, k / (float)puffs) + new Vector2(0f, ry * PuffLift);
+                        _puffs.Add(new Vector4(c.x, c.y, rx, ry));
+                    }
+                }
+                if (_puffs.Count == 0) continue;
+                if (_shape.PadSize(root) >= growth.PadFullNodes) AddPadSilhouette(shade, leaf, light);
+                else
+                {
+                    for (int p = 0; p < _puffs.Count; p++)
+                    {
+                        Vector4 q = _puffs[p];
+                        AddEllipse(new Vector2(q.x, q.y), q.z, q.w, light, shade);
+                    }
+                }
+            }
+
+            // Fresh growth: lighter puffs on the young tips, over the pad.
+            for (int i = 0; i < _count; i++)
+            {
+                if (!_shape.IsLeafy(i) || _nodes[i].AgeDays >= growth.MatureDays) continue;
+                float r = foliage.PuffRadius * _nodes[i].LeafScale * 0.55f;
+                if (r <= 0.2f) continue;
+                float rx = r * foliage.PuffWidthRatio;
+                Vector2 c = _tip[i] + new Vector2(0f, rx * foliage.PadFlatten * 0.6f);
+                AddEllipse(c, rx, rx * foliage.PadFlatten, fresh, leaf);
+            }
+        }
+
+        /// <summary>Union of the puffs, column by column: lumpy domed top, flat (slope-following) bottom, darker underside.</summary>
+        void AddPadSilhouette(Color32 shade, Color32 leaf, Color32 light)
+        {
+            float minX = float.MaxValue, maxX = float.MinValue, meanRy = 0f;
+            float sx = 0f, sy = 0f, sxx = 0f, sxy = 0f;
+            int n = _puffs.Count;
+            for (int p = 0; p < n; p++)
+            {
+                Vector4 q = _puffs[p];
+                minX = Mathf.Min(minX, q.x - q.z);
+                maxX = Mathf.Max(maxX, q.x + q.z);
+                meanRy += q.w;
+                sx += q.x; sy += q.y; sxx += q.x * q.x; sxy += q.x * q.y;
+            }
+            meanRy /= n;
+            float varX = sxx / n - (sx / n) * (sx / n);
+            float slope = varX > 1f ? Mathf.Clamp((sxy / n - (sx / n) * (sy / n)) / varX, -0.6f, 0.6f) : 0f;
+            float intercept = sy / n - slope * sx / n;
+
+            int columns = Mathf.Clamp(Mathf.CeilToInt((maxX - minX) / 0.6f), 4, 240);
+            float step = (maxX - minX) / columns;
+            float mid = 0.5f * (minX + maxX);
+            float half = Mathf.Max(1f, 0.5f * (maxX - minX));
+
+            // Pass 1: raw union of the puff ellipses per column.
+            EnsureColumns(columns + 1);
+            float maxRaw = 0f;
+            for (int c = 0; c <= columns; c++)
+            {
+                float x = minX + c * step;
+                float top = float.MinValue, bottom = float.MaxValue;
+                for (int p = 0; p < n; p++)
+                {
+                    Vector4 q = _puffs[p];
+                    float u = (x - q.x) / q.z;
+                    if (u <= -1f || u >= 1f) continue;
+                    float h = q.w * Mathf.Sqrt(1f - u * u);
+                    top = Mathf.Max(top, q.y + h);
+                    bottom = Mathf.Min(bottom, q.y - h);
+                }
+                _columnTop[c] = top;
+                _columnBottom[c] = bottom;
+                if (top != float.MinValue) maxRaw = Mathf.Max(maxRaw, top - bottom);
+            }
+
+            // Pass 2: dome on top (scaled by local thickness → no steps at the rims), slope-following flat bottom.
+            int previous = -1;
+            for (int c = 0; c <= columns; c++)
+            {
+                float top = _columnTop[c];
+                if (top == float.MinValue)
+                {
+                    previous = -1;
+                    continue;
+                }
+                float x = minX + c * step;
+                float bottom = _columnBottom[c];
+                float raw = top - bottom;
+                float u2 = (x - mid) / half;
+                top += 0.25f * meanRy * Mathf.Max(0f, 1f - u2 * u2) * (maxRaw > 0f ? raw / maxRaw : 0f);
+                float flat = intercept + slope * x - 0.25f * meanRy;
+                bottom = Mathf.Min(Mathf.Max(bottom, flat), top - 0.45f * raw);
+
+                int v = _vertices.Count;
+                AddVertex(new Vector2(x, bottom), shade);
+                AddVertex(new Vector2(x, bottom + 0.42f * (top - bottom)), leaf);
+                AddVertex(new Vector2(x, top), light);
+                if (previous >= 0)
+                {
+                    int a = previous;
+                    _indices.Add(a); _indices.Add(a + 1); _indices.Add(v + 1);
+                    _indices.Add(a); _indices.Add(v + 1); _indices.Add(v);
+                    _indices.Add(a + 1); _indices.Add(a + 2); _indices.Add(v + 2);
+                    _indices.Add(a + 1); _indices.Add(v + 2); _indices.Add(v + 1);
+                }
+                previous = v;
+            }
+        }
+
+        float[] _columnTop = new float[256];
+        float[] _columnBottom = new float[256];
+
+        void EnsureColumns(int count)
+        {
+            if (_columnTop.Length >= count) return;
+            _columnTop = new float[count];
+            _columnBottom = new float[count];
+        }
+
+        static Color32 Scale(Color32 c, float factor) => new Color32(
+            (byte)Mathf.Clamp(Mathf.RoundToInt(c.r * factor), 0, 255),
+            (byte)Mathf.Clamp(Mathf.RoundToInt(c.g * factor), 0, 255),
+            (byte)Mathf.Clamp(Mathf.RoundToInt(c.b * factor), 0, 255), c.a);
+
+        // ---- Primitives -------------------------------------------------------------------------------
+
+        /// <summary>Ellipse with a vertical gradient: <paramref name="top"/> colour on the upper rim, <paramref name="bottom"/> below.</summary>
+        void AddEllipse(Vector2 center, float rx, float ry, Color32 top, Color32 bottom)
+        {
+            if (rx <= 0f || ry <= 0f) return;
+            int start = _vertices.Count;
+            AddVertex(center, Color32.Lerp(bottom, top, 0.6f));
             for (int s = 0; s < DiscSegments; s++)
             {
                 float a = s * (Mathf.PI * 2f / DiscSegments);
-                AddVertex(center + new Vector2(Mathf.Cos(a), Mathf.Sin(a)) * radius, color);
+                float sin = Mathf.Sin(a);
+                AddVertex(center + new Vector2(Mathf.Cos(a) * rx, sin * ry), Color32.Lerp(bottom, top, 0.5f + 0.5f * sin));
             }
             for (int s = 0; s < DiscSegments; s++)
             {

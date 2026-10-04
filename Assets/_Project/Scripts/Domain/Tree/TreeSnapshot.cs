@@ -53,6 +53,12 @@ namespace PocketArbor.Domain.Tree
                     error = "node " + i + " has inconsistent depth";
                     return false;
                 }
+                double attachT = _nodes[i].AttachT;
+                if (!(attachT >= 0.0 && attachT <= 1.0))
+                {
+                    error = "node " + i + " has AttachT outside [0, 1]";
+                    return false;
+                }
             }
             for (int i = 0; i < _nodes.Length; i++)
             {
@@ -103,7 +109,7 @@ namespace PocketArbor.Domain.Tree
                 && a.AgeDays == b.AgeDays && a.Status == b.Status
                 && Same(a.LeafScale, b.LeafScale) && Same(a.FlowerStage, b.FlowerStage)
                 && a.WiredAtUtcMs == b.WiredAtUtcMs && a.WireProgressDays == b.WireProgressDays
-                && a.BranchSide == b.BranchSide;
+                && a.BranchSide == b.BranchSide && Same(a.AttachT, b.AttachT);
         }
 
         static bool Same(double a, double b) => BitConverter.DoubleToInt64Bits(a) == BitConverter.DoubleToInt64Bits(b);

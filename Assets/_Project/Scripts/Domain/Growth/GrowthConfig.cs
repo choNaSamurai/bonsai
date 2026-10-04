@@ -12,7 +12,11 @@ namespace PocketArbor.Domain.Growth
     {
         public int MaxNodes = 200;
         public int MaxDepth = 8;
-        public double BaseGrowthProbability = 0.20;
+        /// <summary>
+        /// BALANCE §1: 0.20; PA-102S AC15 / §1.2.10 compensation → 0.23 (fixture N(D31) ≥ 50, N(D47) ≥ 100 with the role-based
+        /// parent selection). Pending Game Designer sync of the BALANCE table (TD-PA102S-01).
+        /// </summary>
+        public double BaseGrowthProbability = 0.23;
         public int ShootsPerDayMin = 1;
         public int ShootsPerDayMax = 3;
 
@@ -73,6 +77,48 @@ namespace PocketArbor.Domain.Growth
         public double SaplingTwigThickness = 1.2;
         public int SaplingTwigAgeDays = 2;
 
+        // ---- Bonsai shape (BALANCE §1.2, PA-102S) -------------------------------------------------
+
+        // §1.2.1 Attachment point of lateral shoots (fraction of the parent length).
+        public double LateralSlotT0 = 0.45;
+        public double LateralSlotT1 = 0.85;
+        public double TrunkBaseSlotT0 = 0.70;
+        public double TrunkBaseSlotT1 = 0.95;
+        public double AttachTJitter = 0.04;
+        public double AttachTMin = 0.05;
+        public double AttachTMax = 0.97;
+
+        // §1.2.2 Taper: th_at(p, t) = th_p·(1 − (1 − SegmentTipTaper)·t); th_cap = R·th_at(parent, AttachT).
+        public double SegmentTipTaper = 0.70;
+        public double ApicalThicknessRatio = 0.90;
+        public double LateralThicknessRatio = 0.50;
+        public double MinShootThickness = 0.30;
+
+        // §1.2.3 Trunk chain (moyogi S-curve). Amplitude TrunkSwayDeg is per species.
+        public int TrunkChainSegments = 5;
+        public double TrunkSwayDecay = 0.85;
+        public double TrunkSwayJitterDeg = 3.0;
+        public double TrunkCurvatureJitter = 0.10;
+
+        // §1.2.6 Length by branch order: × OrderLengthFactor^min(ordEff, 2).
+        public double OrderLengthFactor = 0.70;
+
+        /// <summary>§1.2.6: continuations / secondary laterals with |world angle| ≥ this arc upwards (like primaries).</summary>
+        public double ArcUpMinWorldAngleDeg = 45.0;
+
+        // §1.2.7 Parent selection role weights (s_i = w_i · RoleWeight_i; Σw for the rate is unchanged).
+        public double ApicalDominanceWeight = 2.5;
+        public double TierWeight = 1.5;
+        public double PadWeight = 1.0;
+        public double InteriorWeight = 0.25;
+
+        // §1.2.5 [MODEL-derived] A pad is "full" from this many nodes.
+        public int PadFullNodes = 4;
+
+        // §1.2.8 Sapling wild twig.
+        public double SaplingTwigAttachT = 0.30;
+        public double SaplingTwigWorldAngleDeg = 30.0;
+
         public static GrowthConfig CreateDefault() => new GrowthConfig();
 
         /// <summary>Composition-time check of structural invariants. Throws on programmer/config error.</summary>
@@ -85,6 +131,11 @@ namespace PocketArbor.Domain.Growth
             if (MaxChildrenPerNode < 1) throw new ArgumentException("MaxChildrenPerNode must be >= 1");
             if (!(LeafUnfoldDays > 0)) throw new ArgumentException("LeafUnfoldDays must be > 0");
             if (!(MaxThickness > 0)) throw new ArgumentException("MaxThickness must be > 0");
+            if (TrunkChainSegments < 1) throw new ArgumentException("TrunkChainSegments must be >= 1");
+            if (!(AttachTMin >= 0.0) || !(AttachTMax <= 1.0) || !(AttachTMin <= AttachTMax)) throw new ArgumentException("AttachT clamp must be within [0, 1]");
+            if (!(SegmentTipTaper >= 0.0) || !(SegmentTipTaper <= 1.0)) throw new ArgumentException("SegmentTipTaper must be in [0, 1]");
+            if (!(ApicalDominanceWeight >= 0.0) || !(TierWeight >= 0.0) || !(PadWeight >= 0.0) || !(InteriorWeight >= 0.0))
+                throw new ArgumentException("Role weights must be >= 0");
         }
     }
 }
