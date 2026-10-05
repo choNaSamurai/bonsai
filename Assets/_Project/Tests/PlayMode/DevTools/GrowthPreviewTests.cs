@@ -141,7 +141,7 @@ namespace PocketArbor.DevTools.Tests
         public void MeshBuilder_FixedPotAndNebari_Day80()
         {
             // PA-102P: pot = 92 units regardless of the crown (BALANCE §1.3.0); Nebari §1.3.3: 7 roots at th0 ≥ 13.9, ≥ 2 per side,
-            // visible end ≥ 0.45 of the base thickness.
+            // visible end ≥ 0.45 of the base thickness; PA-102Q: roots lie on the moss, only the last 25% buried.
             var builder = new TreePreviewMeshBuilder();
             var mesh = new Mesh();
             var samples = new System.Collections.Generic.List<Vector3>();
@@ -163,7 +163,11 @@ namespace PocketArbor.DevTools.Tests
                     if (samples[samples.Count - 1].x < 0f) left++;
                     else right++;
                     Assert.GreaterOrEqual(samples[samples.Count - 1].z / samples[0].z, 0.45f - 1e-4f, "root " + r + " end thickness");
-                    Assert.Less(samples[samples.Count - 1].y, 0f, "root " + r + " ends under the soil line");
+                    // ⚑Q BALANCE §1.4.2 / ADR-0004 rev.4: the tip dives under the moss line; the first 75% lie on the moss (centre ≥ moss line).
+                    float moss = builder.Render.MossLineY;
+                    Assert.Less(samples[samples.Count - 1].y + 0.5f * samples[samples.Count - 1].z, moss, "root " + r + " tip fully under the moss line");
+                    for (int k = 1; k < samples.Count * 3 / 4 - 1; k++)
+                        Assert.GreaterOrEqual(samples[k].y, moss - 1e-3f, "root " + r + " sample " + k + " lies on the moss");
                 }
                 Assert.GreaterOrEqual(left, 2);
                 Assert.GreaterOrEqual(right, 2);
@@ -190,8 +194,11 @@ namespace PocketArbor.DevTools.Tests
             Assert.AreEqual(PotFraming.ZoomMin, PotFraming.Zoom(92f, 0f, new Rect(-10f, 0f, 20f, 20f)), 1e-4f, "a sapling gets the closest frame");
         }
 
+        /// <remarks>PA-102S AC20 (flared base / width at 2/3 of the chain ≥ 4.0) is superseded by ⚑Q BALANCE §1.4.1 / §1.4.0: the flare is
+        /// short (Gaussian, 0.22·th0) and the upper trunk stays thick (w(0.60H) ≈ 0.48·w(0.10H)) → the ratio is ≈ 3–5. The §1.4.0 profile
+        /// itself is checked on 30 seeds by PreviewMetricsHarness (AC6); here: the base still flares (≥ 2.5) and the flare is gone by 0.06 H.</remarks>
         [Test]
-        public void MeshBuilder_Day40And80_NebariBaseToTwoThirdsWidthAtLeast4()
+        public void MeshBuilder_Day40And80_FlaredBaseAndShortFlare()
         {
             var builder = new TreePreviewMeshBuilder();
             var mesh = new Mesh();
@@ -208,7 +215,10 @@ namespace PocketArbor.DevTools.Tests
                         {
                             builder.Build(model.GetTree(day), mesh, model.Config, model.SpeciesConfig);
                             TestContext.Out.WriteLine(species + (styled ? " styled" : " wild") + " D" + day + ": taper " + builder.LastTaperRatio.ToString("0.00") + ", pads " + builder.LastPadCount);
-                            Assert.GreaterOrEqual(builder.LastTaperRatio, 4.0f, species + " D" + day);
+                            Assert.GreaterOrEqual(builder.LastTaperRatio, 2.5f, species + " D" + day);
+                            float h = builder.LastHeight;
+                            float w06 = builder.TrunkWidthAtHeight(0.06f * h), w10 = builder.TrunkWidthAtHeight(0.10f * h);
+                            Assert.LessOrEqual(w06 / w10, 1.15f, species + " D" + day + ": flare ends below 0.06 H");
                             Assert.Greater(mesh.vertexCount, 0);
                         }
                     }

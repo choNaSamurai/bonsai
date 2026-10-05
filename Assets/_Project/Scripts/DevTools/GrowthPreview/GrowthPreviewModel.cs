@@ -24,6 +24,8 @@ namespace PocketArbor.DevTools.GrowthPreview
         readonly List<KeyValuePair<int, int>> _cuts = new List<KeyValuePair<int, int>>(); // (day, nodeId)
         readonly System.Random _cutPicker = new System.Random(1);
         readonly StyleConfig _style = StyleConfig.CreateDefault();
+        readonly StyleConfig _styleBaseline = StyleConfig.CreateDefault();
+        ShapeStyle _shapeStyle = ShapeStyle.Moyogi;
         readonly MoyogiStyler _styler = new MoyogiStyler();
 
         SpeciesId _speciesId = SpeciesId.Kuromatsu;
@@ -54,6 +56,22 @@ namespace PocketArbor.DevTools.GrowthPreview
 
         /// <summary>PA-102P: moyogi styling parameters (BALANCE §1.3.7); change them before the first <see cref="GetDay"/>.</summary>
         public StyleConfig Style => _style;
+
+        /// <summary>PA-102Q: classical style preset (BALANCE §1.4.7, DevTools only) — ShapeStyleProfile of every species + StyleConfig difference.</summary>
+        public ShapeStyle ShapeStyle => _shapeStyle;
+
+        public void SetShapeStyle(ShapeStyle style)
+        {
+            if (style == _shapeStyle) return;
+            _shapeStyle = style;
+            ShapeStyleProfile profile = ShapeStylePresets.Profile(style);
+            _species.Get(SpeciesId.Kuromatsu).Style = profile;
+            _species.Get(SpeciesId.Momiji).Style = profile;
+            _species.Get(SpeciesId.Yamazakura).Style = profile;
+            ShapeStylePresets.ApplyStyle(_style, _styleBaseline, style);
+            _cuts.Clear();
+            Invalidate(0);
+        }
 
         /// <summary>Wild (no pruning) or Styled (<see cref="PruneToStyle"/> S1–S7 on <see cref="StyleConfig.IsStyleDay"/> — D20, 30, …, 120).</summary>
         public void SetStyled(bool styled)

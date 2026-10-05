@@ -42,13 +42,19 @@ namespace PocketArbor.Domain.Tests.Growth
                             continue;
                         }
                         Assert.That(t, Is.InRange(0.05, 0.97), at);
-                        if (nodes[i].ParentIndex == 0) Assert.That(t, Is.InRange(0.66, 0.97), at + " (#0 slots)");
+                        // ⚑Q BALANCE §1.4.1(в): #0 slots 0.78 / 0.95 ± 0.04 (clamped to 0.97).
+                        double slot0Min = config.TrunkBaseSlotT0 - config.AttachTJitter - 1e-9;
+                        double slotBoundary = 0.5 * (config.TrunkBaseSlotT0 + config.TrunkBaseSlotT1);
+                        if (nodes[i].ParentIndex == 0) Assert.That(t, Is.InRange(slot0Min, 0.97), at + " (#0 slots)");
                         else Assert.IsTrue((t >= 0.41 && t <= 0.49) || (t >= 0.81 && t <= 0.89), at + " (slots 0.45 / 0.85): " + t);
                         for (int j = i + 1; j < nodes.Length; j++)
                         {
                             if (nodes[j].ParentIndex == nodes[i].ParentIndex && nodes[j].BranchSide != 0)
                             {
-                                Assert.GreaterOrEqual(Math.Abs(nodes[j].AttachT - t), 0.17, at + " vs sibling " + j);
+                                // #0: slot gap 0.17 − 2·0.04 jitter = 0.09 (§1.4.1(в): «±0.04 does not cross the boundary 0.865»).
+                                double gap = nodes[i].ParentIndex == 0 ? 0.09 - 1e-9 : 0.17;
+                                Assert.GreaterOrEqual(Math.Abs(nodes[j].AttachT - t), gap, at + " vs sibling " + j);
+                                if (nodes[i].ParentIndex == 0) Assert.AreNotEqual(t < slotBoundary, nodes[j].AttachT < slotBoundary, at + " one per #0 slot");
                             }
                         }
                     }
@@ -182,8 +188,11 @@ namespace PocketArbor.Domain.Tests.Growth
                         for (int i = 1; i < nodes.Length; i++)
                         {
                             NodeData n = nodes[i];
-                            double ratio = n.BranchSide == 0 ? 0.90 : 0.50;
-                            double cap = ratio * nodes[n.ParentIndex].Thickness * (1.0 - 0.3 * n.AttachT);
+                            // ⚑Q BALANCE §1.4.1(б) / §1.4.3: children of ord-0 parents — apical 0.75·th_p, lateral 0.38·th_at; else §1.2.2.
+                            bool parentAxis = TreeShapeAnalysis.OrderOf(nodes, n.ParentIndex) == 0;
+                            double cap = parentAxis
+                                ? (n.BranchSide == 0 ? config.TrunkChainTaperRatio * nodes[n.ParentIndex].Thickness : config.PrimaryThicknessRatio * nodes[n.ParentIndex].Thickness * (1.0 - 0.3 * n.AttachT))
+                                : (n.BranchSide == 0 ? 0.90 : 0.50) * nodes[n.ParentIndex].Thickness * (1.0 - 0.3 * n.AttachT);
                             Assert.LessOrEqual(n.Thickness, Math.Max(config.MinShootThickness, cap) + 1e-9, species + " seed " + seed + " day " + day + " node " + i);
                             if (previous.TryGetValue(n.Id, out double before)) Assert.GreaterOrEqual(n.Thickness, before, "never shrinks");
                             previous[n.Id] = n.Thickness;
@@ -193,8 +202,13 @@ namespace PocketArbor.Domain.Tests.Growth
             }
         }
 
+        /// <remarks>
+        /// PA-102S AC20 «base / width at 2/3 of the chain ≥ 2.5» is superseded by ⚑Q BALANCE §1.4.1(б) + §1.4.0 (the upper trunk must
+        /// stay thick: w(0.60H)/w(0.10H) ≈ 0.48, i.e. th0 / w(2/3 chain) ≈ 2.0–2.8); the visible profile is measured on the mesh
+        /// (PreviewMetricsHarness, AC6). Here: the model side — the trunk still tapers (ratio &gt; 1.5) and never more than ×3.5.
+        /// </remarks>
         [Test]
-        public void Taper_Day40And80_BaseToTwoThirdsHeightAtLeast2_5()
+        public void Taper_Day40And80_TrunkTapersButUpperTrunkStaysThick()
         {
             var config = Config();
             var sim = ShapeMetrics.Simulator(config);
@@ -206,8 +220,8 @@ namespace PocketArbor.Domain.Tests.Growth
                     double d40 = ShapeMetrics.TaperRatio(tree, ShapeMetrics.Analyze(tree, config), config);
                     ShapeMetrics.RunDays(sim, tree, 40);
                     double d80 = ShapeMetrics.TaperRatio(tree, ShapeMetrics.Analyze(tree, config), config);
-                    Assert.GreaterOrEqual(d40, 2.5, species + " seed " + seed + " D40");
-                    Assert.GreaterOrEqual(d80, 2.5, species + " seed " + seed + " D80");
+                    Assert.That(d40, Is.InRange(1.5, 3.5), species + " seed " + seed + " D40");
+                    Assert.That(d80, Is.InRange(1.5, 3.5), species + " seed " + seed + " D80");
                 }
             }
         }
@@ -215,7 +229,7 @@ namespace PocketArbor.Domain.Tests.Growth
         // ---- AC7: horizontality ------------------------------------------------------------------------
 
         [TestCase(SpeciesId.Kuromatsu, 74.0, 86.0)]
-        [TestCase(SpeciesId.Momiji, 52.0, 72.0)]
+        [TestCase(SpeciesId.Momiji, 62.0, 80.0)] // ⚑Q §1.4.3: mean 62° → 66° Proposed → 72° tuned (range 60–72°)
         [TestCase(SpeciesId.Yamazakura, 60.0, 80.0)]
         public void Primaries_Day80_MedianWorldAngleInSpeciesRange(SpeciesId species, double min, double max)
         {
@@ -287,16 +301,27 @@ namespace PocketArbor.Domain.Tests.Growth
                     }
                     else if (n.BranchSide == 0)
                     {
-                        expected = baseLength * config.BranchApicalLengthMultiplier * orderFactor;
+                        expected = baseLength * config.BranchApicalLengthMultiplier * orderFactor * AxisLengthFactor(tree, shape, i, config);
                         continuations++;
                     }
-                    else expected = baseLength * orderFactor;
+                    else expected = baseLength * orderFactor * AxisLengthFactor(tree, shape, i, config);
                     Assert.AreEqual(expected, n.TargetLength, 1e-12, species + " node " + i);
                 }
                 Assert.AreEqual(config.TrunkTargetLength, tree.Nodes[0].TargetLength);
                 Assert.Greater(crown, 0, species + ": crown axis exists by D120");
                 Assert.Greater(continuations, 10, species.ToString());
             }
+        }
+
+        /// <summary>⚑Q BALANCE §1.4.3 / §1.4.4 (AC14): PrimaryLengthFactor on every ord-1 node of an axis rooted on the chain,
+        /// CrownLateralLengthFactor on every ord-1 node of an axis rooted on the crown axis, 1 otherwise (ord ≥ 2 included).</summary>
+        static double AxisLengthFactor(TreeGraph tree, TreeShapeAnalysis shape, int i, GrowthConfig config)
+        {
+            if (shape.Order(i) != 1) return 1.0;
+            int root = i;
+            while (tree.Nodes[root].BranchSide == 0) root = tree.Nodes[root].ParentIndex;
+            int p = tree.Nodes[root].ParentIndex;
+            return shape.IsTrunkChain(p) ? config.PrimaryLengthFactor : config.CrownLateralLengthFactor;
         }
 
         [Test]

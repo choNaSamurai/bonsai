@@ -31,6 +31,7 @@ namespace PocketArbor.Domain.Tree
             double ua = ShootDraws.Uniform(rng);
             double ub = ShootDraws.Uniform(rng);
             // ⚑P BALANCE §1.3.1: the base of #0 leans opposite to k1 (lean + TierPhase·TrunkBaseSwayRatio·A_1), no RNG.
+            // ⚑Q §1.4.7: + λ·TierPhase and σ on the base sway (ShapeStyleProfile).
             double trunkAngle = ShootBuilder.ClampToPotLip(0.0,
                 ShootBuilder.TrunkBaseWorldAngleDeg(genome, config, species) * GrowthFormulas.DegToRad, config);
             tree.Append(new NodeData
@@ -42,7 +43,7 @@ namespace PocketArbor.Domain.Tree
                 Thickness = config.TrunkInitialThickness,
                 BaseAngle = trunkAngle,
                 CurrentAngle = trunkAngle,
-                Curvature = GrowthFormulas.Triangular(0.0, config.TrunkCurvatureJitter, ua, ub),
+                Curvature = GrowthFormulas.Triangular(0.0, config.TrunkCurvatureJitter, ua, ub) * ShapeParams.Resolve(config, species).JitterScale,
                 Status = NodeStatus.Mature,
                 LeafScale = 0f,
                 AttachT = 1.0,
@@ -53,8 +54,12 @@ namespace PocketArbor.Domain.Tree
             ShootDraws leaderDraws = ShootDraws.Next(rng);
             NodeData leader = ShootBuilder.Build(tree, 0, in leaderDraws, config, species, applyApicalDelay: false);
             leader.Length = config.SaplingLeaderLength;
-            leader.Thickness = Math.Min(config.SaplingLeaderThickness, Math.Min(GrowthFormulas.MaxThicknessAt(leader.Depth, config),
-                GrowthFormulas.ThicknessCap(config.TrunkInitialThickness, leader.AttachT, true, config)));
+            // ⚑Q BALANCE §1.4.1(б): the leader is an ord-0 apical child of #0.
+            ShapeParams shape = ShapeParams.Resolve(config, species);
+            leader.Thickness = Math.Min(config.SaplingLeaderThickness,
+                Math.Min(GrowthFormulas.MaxThicknessAt(leader.Depth, true, shape.TrunkChainDepthScaleFactor, config),
+                    GrowthFormulas.AxisChildThicknessCap(config.TrunkInitialThickness, leader.AttachT, true, shape.TrunkChainTaperRatio,
+                        shape.PrimaryThicknessRatio, config)));
             leader.Status = NodeStatus.Growing;
             leader.AgeDays = config.SaplingLeaderAgeDays;
             leader.LeafScale = 1f;

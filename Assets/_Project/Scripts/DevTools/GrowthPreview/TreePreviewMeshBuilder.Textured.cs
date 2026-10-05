@@ -99,9 +99,11 @@ namespace PocketArbor.DevTools.GrowthPreview
             uint seed = tree.Genome.Seed;
 
             int roots = NebariRootCount(growth);
+            _rootTips.Clear();
             for (int r = 0; r < roots; r++)
             {
                 NebariRoot(seed, r, roots, _rootSamples);
+                RecordRootTip(_rootSamples);
                 float tone = Mathf.Lerp(style.RootToneMin, style.RootToneMax, Hash01(seed, _nodes[0].Id, 311u + (uint)r));
                 AddBarkRoot(_rootSamples, Hash01(seed, _nodes[0].Id, 307u + (uint)r) * style.BarkTileWorld * 4f, tone, style);
             }
@@ -178,9 +180,11 @@ namespace PocketArbor.DevTools.GrowthPreview
             Vector2 lastTangent = _dir[i];
             float lastWidth = 0f;
             float tEnd = BarkEndT(i);
-            for (int s = 0; s <= SegmentSamples; s++)
+            int sectionCount = Sections(i);
+            bool flare = sectionCount != SegmentSamples;
+            for (int s = 0; s <= sectionCount; s++)
             {
-                float t = tEnd * s / SegmentSamples;
+                float t = tEnd * SectionT(s, sectionCount, flare);
                 Vector2 point = Eval(i, t);
                 Vector2 tangent = Eval(i, Mathf.Min(1f, t + 0.01f)) - Eval(i, Mathf.Max(0f, t - 0.01f));
                 tangent = tangent.sqrMagnitude > 1e-10f ? tangent.normalized : _dir[i];
@@ -204,7 +208,7 @@ namespace PocketArbor.DevTools.GrowthPreview
             }
             _arcEnd[i] = arc;
 
-            int sections = SegmentSamples + 1;
+            int sections = sectionCount + 1;
             if (_shape.ApicalChild(i) < 0)
             {
                 // Rounded-off terminal tip: one extra section past the tip, nearly closed.

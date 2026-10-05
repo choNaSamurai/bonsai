@@ -2,6 +2,15 @@ using PocketArbor.Domain.Tree;
 
 namespace PocketArbor.DevTools.GrowthPreview
 {
+    /// <summary>⚑Q BALANCE §1.4.1(а): fall-off of the Nebari base flare along the #0 axis.</summary>
+    public enum NebariFlareProfile
+    {
+        /// <summary>PA-102P: 1 + F·e^{−y/(h·th0)} over the height (kept for comparison).</summary>
+        Exponential = 0,
+        /// <summary>PA-102Q: 1 + F·e^{−(s/(h·th0))²}, s = arc length along the #0 axis (ADR-0004 rev.4: follows a leaning base).</summary>
+        Gaussian = 1,
+    }
+
     /// <summary>
     /// [RENDER] parameters of BALANCE §1.1 (CurvatureOffsetRatio), §1.2.2 and ⚑P §1.3.0 / §1.3.3 / §1.3.4 for the preview.
     /// Plain C# prototype of the PA-103 <c>TreeRenderConfig</c> ScriptableObject (owner: Technical Artist / PA-103).
@@ -39,11 +48,11 @@ namespace PocketArbor.DevTools.GrowthPreview
         public float NebariRootDropMinDeg = 35f;
         public float NebariRootDropMaxDeg = 55f;
 
-        /// <summary>Second (near-horizontal) segment: degrees below horizontal at the hidden end.</summary>
+        /// <summary>Visible part on the moss: degrees below horizontal at its end (gentle droop towards the buried tip).</summary>
         public float NebariRootEndDropDeg = 6f;
 
-        /// <summary>Share of the root length taken by the first (dropping) segment.</summary>
-        public float NebariRootKnee = 0.4f;
+        /// <summary>Buried tip (last NebariRootTipBuryRatio of the length): degrees below horizontal as it dives under the moss.</summary>
+        public float NebariRootBuryDropDeg = 30f;
 
         /// <summary>Cross wave amplitude = NebariRootWaviness × th0, one period per root, phase by hash.</summary>
         public float NebariRootWaviness = 0.15f;
@@ -58,15 +67,36 @@ namespace PocketArbor.DevTools.GrowthPreview
         public float NebariFrontRootDeg = 25f;
         public float NebariFrontRootScale = 0.6f;
 
-        /// <summary>Roots start on the flare this × th0 above the soil and end this far below the SoilFront ground line (hidden).</summary>
-        public float NebariRootStartHeight = 0.5f;
+        /// <summary>⚑Q BALANCE §1.4.2: a root starts on the flare this × th0 above the soil (D80 3.8 units).</summary>
+        public float NebariRootStartHeightRatio = 0.35f; // PA-102Q tuning: 0.25 → 0.35 (range 0.15–0.35; roots leave the flare above the moss): TD-042
+
+        /// <summary>⚑Q BALANCE §1.4.2: only the last this share of a root's length dips under the moss line (the rest lies on the moss).</summary>
+        public float NebariRootTipBuryRatio = 0.25f;
+
+        /// <summary>ADR-0004 rev.4: the visible part's centre line stays this far above the moss line (never below it).</summary>
+        public float NebariRootMossClearance = 0.3f;
+
+        /// <summary>The buried tip ends this far (+ its half width) below the moss line.</summary>
         public float NebariRootEndDepth = 0.8f;
 
-        // Base flare: w(y) = th0·(1 + F·e^{−y / (NebariFlareHeightRatio·th0)}), F = FlareMin + FlareGain·clamp01((th0 − th_init) / (th_max − th_init)).
+        /// <summary>Moss tuft over a root tip (SoilFront mesh): width × root tip width, height above the moss line.</summary>
+        public float NebariTipTuftWidthRatio = 2.6f;
+        public float NebariTipTuftHeight = 1.2f;
+
+        /// <summary>⚑Q BALANCE §1.4.2: ground line of the SoilFront band (world y) and the height of its opaque moss above it (≤ 2.5 units,
+        /// asset — TA). Moss line = SoilFrontGroundY + SoilFrontMossHeightUnits.</summary>
+        public float SoilFrontGroundY = -0.4f;
+        public float SoilFrontMossHeightUnits = 2.5f;
+
+        public float MossLineY => SoilFrontGroundY + SoilFrontMossHeightUnits;
+
+        // Base flare: w = w_axis·(1 + F·fall-off), F = FlareMin + FlareGain·clamp01((th0 − th_init) / (th_max − th_init)).
         public float NebariFlareMin = 0.25f;
-        /// <summary>⚑P BALANCE §1.3.3: 0.5 → 0.70 (F at D80 ≈ 0.65).</summary>
-        public float NebariFlareGain = 0.70f;
-        public float NebariFlareHeightRatio = 1.5f;
+        /// <summary>⚑Q BALANCE §1.4.1(а): 0.70 → 1.30 (F at D80 ≈ 0.98).</summary>
+        public float NebariFlareGain = 1.30f;
+        /// <summary>⚑Q BALANCE §1.4.1(а): 1.5 → 0.22 with the Gaussian fall-off (D80: < 1% above 0.47·th0 = 7.2 units).</summary>
+        public float NebariFlareHeightRatio = 0.28f; // PA-102Q tuning: 0.22 → 0.28 (range 0.18–0.28): the peak was under the 2.1-unit moss band (TD-042)
+        public NebariFlareProfile NebariFlareProfile = NebariFlareProfile.Gaussian;
 
         // ⚑P BALANCE §1.3.4 [RENDER] pads.
         /// <summary>Bark of InPad nodes with ord ≥ 2 ends this × PuffRadius before the tip (inside the pad).</summary>
@@ -113,9 +143,11 @@ namespace PocketArbor.DevTools.GrowthPreview
         {
             switch (species)
             {
-                case SpeciesId.Momiji: return new FoliageConfig { PuffRadius = 9f, PadFlatten = 0.65f };
+                // PA-102Q tuning: Momiji PuffRadius 9 → 8.55 (−5%, PA-102P range ±15%; TD-042).
+                case SpeciesId.Momiji: return new FoliageConfig { PuffRadius = 8.55f, PadFlatten = 0.65f };
                 case SpeciesId.Yamazakura: return new FoliageConfig { PuffRadius = 8f, PadFlatten = 0.60f };
-                default: return new FoliageConfig { PuffRadius = 7f, PadFlatten = 0.55f, PadMaxRowsSide = 1 };
+                // ⚑Q BALANCE §1.4.5: Kuromatsu PuffRadius 7 → 8, PadFlatten 0.55 → 0.62 (denser, thicker shelves).
+                default: return new FoliageConfig { PuffRadius = 8f, PadFlatten = 0.62f, PadMaxRowsSide = 1 };
             }
         }
     }

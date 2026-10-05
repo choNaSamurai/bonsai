@@ -78,7 +78,10 @@ namespace PocketArbor.Domain.Tests.Growth
                 AssertFinite(n.Curvature, "Curvature", i);
                 AssertFinite(n.LeafScale, "LeafScale", i);
                 Assert.That(n.AttachT, Is.InRange(0.0, 1.0), "AttachT at " + i);
-                Assert.LessOrEqual(n.Thickness, GrowthFormulas.MaxThicknessAt(n.Depth, config) + 1e-9, "thickness > th_max at " + i);
+                // ⚑Q BALANCE §1.4.1(б): ord-0 nodes have th_max = MaxThickness·depthScale(Depth·TrunkChainDepthScaleFactor).
+                bool ord0 = TreeShapeAnalysis.OrderOf(nodes, i) == 0;
+                Assert.LessOrEqual(n.Thickness, GrowthFormulas.MaxThicknessAt(n.Depth, ord0, config.TrunkChainDepthScaleFactor, config) + 1e-9,
+                    "thickness > th_max at " + i);
                 Assert.LessOrEqual(Math.Abs(tree.WorldAngle(i)), maxWorld, "world angle > 90° at " + i);
                 for (int j = i + 1; j < nodes.Length; j++) Assert.AreNotEqual(n.Id, nodes[j].Id, "duplicate id");
             }

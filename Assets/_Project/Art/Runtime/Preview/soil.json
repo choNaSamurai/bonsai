@@ -3,5 +3,16 @@
   "fitsPot": "pot_tokoname",
   "width": 1018,
   "height": 200,
-  "note": "Both soil_moist.png and soil_dry.png share this exact layout; groundFromTop = px from the top edge to the ground line (top of the opaque band). Strip sits BEHIND pot_tokoname.png, ground line aligned to pot innerTopY, strip centred on the pot opening (innerLeft..innerRight + 12px each side). Side edges are trapezoid-masked to the opening of pot_tokoname; another pot needs its own mask."
+  "note": "Both soil_moist.png and soil_dry.png share this exact layout; groundFromTop = px from the top edge to the ground line (top of the opaque band). Strip sits BEHIND pot_tokoname.png, ground line aligned to pot innerTopY, strip centred on the pot opening (innerLeft..innerRight + 12px each side). Side edges are trapezoid-masked to the opening of pot_tokoname; another pot needs its own mask.",
+  "unitsPerPx": 0.09218,
+  "frontZoneHalfWidthPx": 380,
+  "frontMossAbovePx": 25,
+  "frontMossAboveUnits": 2.3,
+  "frontBandBelowPx": 24,
+  "frontBandBelowUnits": 2.21,
+  "frontBandDepthShare": 0.12,
+  "frontNote": "PA-102Q SoilFront: in |x| <= frontZoneHalfWidthPx (35 units at pot 92) the opaque moss (alpha >= 0.5) rises at most frontMossAbovePx above the ground line (frontMossAboveUnits, BALANCE 1.4.2 limit 2.5). Recommended band below the ground line: frontBandBelowPx (= TexturedStyleConfig.SoilFrontDepthShare frontBandDepthShare; PA-103S default 0.3 = 60 px = 5.5 units). unitsPerPx assumes PotWidthUnits 92 and SoilWidthRatio 1.02 (strip drawn 1.15x wider than the pot pixels it was cut for); *AtPotScale = SoilWidthRatio <= 0.886 (strip at pot pixel scale, fits the opening as designed).",
+  "unitsPerPxAtPotScale": 0.08014,
+  "frontMossAboveUnitsAtPotScale": 2.0,
+  "frontBandBelowUnitsAtPotScale": 1.92
 }

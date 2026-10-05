@@ -34,18 +34,26 @@ namespace PocketArbor.Domain.Growth
         public double CrownLateralAngleMeanDeg;
         public double CrownLateralAngleSpreadDeg;
 
+        /// <summary>
+        /// ⚑Q BALANCE §1.4.7 [STYLE-PROFILE]: shape knobs of this species (σ, λ, jitter floor + overrides of the shape groups).
+        /// Null = Moyogi with the plain config fields (bitwise the same tree as <see cref="ShapeStyleProfile.Moyogi"/>, AC19).
+        /// </summary>
+        public ShapeStyleProfile Style;
+
         public static SpeciesConfig Kuromatsu() => new SpeciesConfig
         {
             Id = SpeciesId.Kuromatsu, KBase = 0.15, BranchAngleMeanDeg = 30.0, BranchAngleSpreadDeg = 10.0, CurvatureSpread = 0.45,
-            PrimaryAngleMeanDeg = 80.0, PrimaryAngleSpreadDeg = 6.0, TrunkSwayDeg = 32.0, BranchDroop = 0.50, PadDepth = 1,
+            PrimaryAngleMeanDeg = 80.0, PrimaryAngleSpreadDeg = 6.0, TrunkSwayDeg = 32.0, BranchDroop = 0.50, PadDepth = 2, // ⚑Q §1.4.5: 1 → 2
             CrownLateralAngleMeanDeg = 70.0, CrownLateralAngleSpreadDeg = 8.0,
         };
 
         public static SpeciesConfig Momiji() => new SpeciesConfig
         {
             Id = SpeciesId.Momiji, KBase = 0.28, BranchAngleMeanDeg = 30.0, BranchAngleSpreadDeg = 10.0, CurvatureSpread = 0.20,
-            PrimaryAngleMeanDeg = 62.0, PrimaryAngleSpreadDeg = 10.0, TrunkSwayDeg = 30.0, BranchDroop = 0.20, PadDepth = 2,
-            CrownLateralAngleMeanDeg = 55.0, CrownLateralAngleSpreadDeg = 10.0,
+            // ⚑Q §1.4.3 / §1.4.4: primaries 62° → 66° (PA-102Q tuning → 72°, range 60–72°), dome laterals 55° → 60°;
+            // sway 30° → 26° (PA-102P range 30 ± 4°). TD-042.
+            PrimaryAngleMeanDeg = 72.0, PrimaryAngleSpreadDeg = 10.0, TrunkSwayDeg = 26.0, BranchDroop = 0.20, PadDepth = 2,
+            CrownLateralAngleMeanDeg = 60.0, CrownLateralAngleSpreadDeg = 10.0,
         };
 
         public static SpeciesConfig Yamazakura() => new SpeciesConfig

@@ -209,8 +209,9 @@ namespace PocketArbor.Domain.Tests.Growth
         public void GrowthConfig_ShapeDefaults_MatchBalanceSection12()
         {
             var c = GrowthConfig.CreateDefault();
-            Assert.AreEqual(new[] { 0.45, 0.85, 0.70, 0.95, 0.04, 0.05, 0.97 },
-                new[] { c.LateralSlotT0, c.LateralSlotT1, c.TrunkBaseSlotT0, c.TrunkBaseSlotT1, c.AttachTJitter, c.AttachTMin, c.AttachTMax });
+            // ⚑Q BALANCE §1.4.1(в): TrunkBaseSlotT0 0.70 → 0.78 (range 0.74–0.82, checked in IdealShapeTests).
+            Assert.AreEqual(new[] { 0.45, 0.85, 0.95, 0.04, 0.05, 0.97 },
+                new[] { c.LateralSlotT0, c.LateralSlotT1, c.TrunkBaseSlotT1, c.AttachTJitter, c.AttachTMin, c.AttachTMax });
             Assert.AreEqual(new[] { 0.70, 0.90, 0.50, 0.30 },
                 new[] { c.SegmentTipTaper, c.ApicalThicknessRatio, c.LateralThicknessRatio, c.MinShootThickness });
             Assert.AreEqual(5, c.TrunkChainSegments);
@@ -265,9 +266,12 @@ namespace PocketArbor.Domain.Tests.Growth
             // BALANCE §1.2.3 / §1.2.5 / §1.2.6: primary angle, spread, sway, droop.
             // ⚑P BALANCE §1.3.1: TrunkSwayDeg 32 / 30 / 26 (was 14 / 9 / 12).
             Assert.AreEqual(new[] { 80.0, 6.0, 32.0, 0.50 }, new[] { k.PrimaryAngleMeanDeg, k.PrimaryAngleSpreadDeg, k.TrunkSwayDeg, k.BranchDroop });
-            Assert.AreEqual(new[] { 62.0, 10.0, 30.0, 0.20 }, new[] { m.PrimaryAngleMeanDeg, m.PrimaryAngleSpreadDeg, m.TrunkSwayDeg, m.BranchDroop });
+            // ⚑Q BALANCE §1.4.3: Momiji primaries 62° → 66° (range 60–72°, checked in IdealShapeTests).
+            Assert.AreEqual(new[] { 10.0, 0.20 }, new[] { m.PrimaryAngleSpreadDeg, m.BranchDroop });
+            Assert.That(m.TrunkSwayDeg, Is.InRange(26.0, 34.0), "PA-102P range 30 ± 4° (PA-102Q tuning 26°)");
             Assert.AreEqual(new[] { 70.0, 10.0, 26.0, 0.30 }, new[] { y.PrimaryAngleMeanDeg, y.PrimaryAngleSpreadDeg, y.TrunkSwayDeg, y.BranchDroop });
-            Assert.AreEqual(new[] { 1, 2, 2 }, new[] { k.PadDepth, m.PadDepth, y.PadDepth });
+            // ⚑Q BALANCE §1.4.5: Kuromatsu PadDepth 1 → 2.
+            Assert.AreEqual(new[] { 2, 2, 2 }, new[] { k.PadDepth, m.PadDepth, y.PadDepth });
         }
     }
 }

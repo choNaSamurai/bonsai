@@ -15,6 +15,7 @@ namespace PocketArbor.DevTools.GrowthPreview
         static readonly string[] SpeciesNames = { "Kuromatsu", "Momiji", "Yamazakura" };
         static readonly string[] ModeNames = { "Wild", "Styled" };
         static readonly string[] StyleNames = { "Flat", "Textured" };
+        static readonly string[] ShapeStyleNames = { "Moyogi", "Chokkan", "Shakan" };
         static readonly string[] ShaderCandidates =
         {
             "Universal Render Pipeline/2D/Sprite-Unlit-Default",
@@ -31,6 +32,7 @@ namespace PocketArbor.DevTools.GrowthPreview
         [SerializeField, Range(0f, 1f)] float _moisture = 0.5f;
         [SerializeField] bool _onboardingCut;
         [SerializeField, Tooltip("PA-102P: PruneToStyle S1–S7 on days 20/30/…/120")] bool _styled;
+        [SerializeField, Tooltip("PA-102Q: classical style preset (BALANCE §1.4.7) — Moyogi (reference), Chokkan, Shakan")] ShapeStyle _shapeStyle;
         [SerializeField, Tooltip("PA-103S: Textured = painted bark, atlas pads, pot/soil/washi art")] bool _textured;
         [SerializeField, Tooltip("PA-103S: realism_l2_painterly.jpg over the preview, aligned by the pot")] bool _referenceOverlay;
         [SerializeField, Range(0f, 1f)] float _referenceAlpha = 0.5f;
@@ -87,6 +89,16 @@ namespace PocketArbor.DevTools.GrowthPreview
         }
 
         public bool Styled => _styled;
+
+        public ShapeStyle ShapeStyle => _shapeStyle;
+
+        /// <summary>PA-102Q: Moyogi / Chokkan / Shakan preset (DevTools; in the game the style comes from the player's actions).</summary>
+        public void SetShapeStyle(ShapeStyle style)
+        {
+            _shapeStyle = style;
+            _paramsDirty = true;
+            Refresh();
+        }
 
         /// <summary>PA-102P harness: Styled = planting → onboarding cut → styling (AC notation).</summary>
         public void SetOnboardingCut(bool cut)
@@ -168,6 +180,7 @@ namespace PocketArbor.DevTools.GrowthPreview
             {
                 _model.SetParameters(_species, _seed, _vigor, _bendBias, _temperatureC, _moisture, _onboardingCut);
                 _model.SetStyled(_styled);
+                _model.SetShapeStyle(_shapeStyle);
                 _paramsDirty = false;
                 _shownDay = -1;
             }
@@ -369,6 +382,13 @@ namespace PocketArbor.DevTools.GrowthPreview
             if (mode != (_styled ? 1 : 0))
             {
                 _styled = mode == 1;
+                _paramsDirty = true;
+            }
+
+            int shapeStyle = GUILayout.Toolbar((int)_shapeStyle, ShapeStyleNames);
+            if (shapeStyle != (int)_shapeStyle)
+            {
+                _shapeStyle = (ShapeStyle)shapeStyle;
                 _paramsDirty = true;
             }
 

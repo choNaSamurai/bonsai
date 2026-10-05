@@ -21,6 +21,7 @@ namespace PocketArbor.Domain.Growth
         readonly int[] _candidates = new int[TreeGraph.Capacity];
         readonly double[] _weights = new double[TreeGraph.Capacity];
         readonly double[] _selectionWeights = new double[TreeGraph.Capacity];
+        readonly int[] _order = new int[TreeGraph.Capacity];
         readonly TreeShapeAnalysis _shape = new TreeShapeAnalysis();
 
         public GrowthSimulator(GrowthConfig config, SoilConfig soil, SpeciesCatalog species)
@@ -87,6 +88,7 @@ namespace PocketArbor.Domain.Growth
             GrowthConfig cfg = _config;
             ref GrowthState state = ref tree.GrowthRef;
             SpeciesConfig species = _species.Get(tree.Genome.Species);
+            ShapeParams shape = ShapeParams.Resolve(cfg, species);
             int maxNodes = Math.Min(cfg.MaxNodes, TreeGraph.Capacity);
 
             // 1. Day factors, day index, Nebari flag (fixed before spawning).
@@ -132,16 +134,22 @@ namespace PocketArbor.Domain.Growth
                 }
 
                 // 5. Thickening (M_soil = mean moisture factor of the day, Δt = 1 day).
-                double depthScale = GrowthFormulas.DepthScale(node.Depth, cfg);
+                // ⚑Q BALANCE §1.4.1(б): ord-0 nodes (chain, crown axis) take depthScale(Depth·TrunkChainDepthScaleFactor);
+                // r = K·M·depthScale/th_max = K·M/MaxThickness is unchanged.
+                int parentIndex = node.ParentIndex;
+                int order = parentIndex < 0 ? 0 : _order[parentIndex] + (node.BranchSide != 0 ? 1 : 0);
+                _order[i] = order;
+                double depthScale = GrowthFormulas.AxisDepthScale(node.Depth, order == 0, shape.TrunkChainDepthScaleFactor, cfg);
                 double thMax = cfg.MaxThickness * depthScale;
                 double k = node.Depth == 0 && nebari ? cfg.ThickeningRate * cfg.NebariThickeningMultiplier : cfg.ThickeningRate;
                 double thickness = node.Thickness;
                 double thickened = GrowthFormulas.Thicken(thickness, thMax, k, meanMoisture, depthScale, 1.0);
-                if (node.ParentIndex >= 0)
+                if (parentIndex >= 0)
                 {
                     // ⚑ BALANCE §1.2.2: taper ceiling th_cap from the parent, already updated (index order);
-                    // clamp to [th, max(th, min(th_max, th_cap))] — never shrinks.
-                    double cap = GrowthFormulas.ThicknessCap(tree.NodeAt(node.ParentIndex).Thickness, node.AttachT, node.BranchSide == 0, cfg);
+                    // clamp to [th, max(th, min(th_max, th_cap))] — never shrinks. ⚑Q §1.4.1(б)/§1.4.3: children of ord-0 parents.
+                    double cap = GrowthFormulas.ThicknessCap(tree.NodeAt(parentIndex).Thickness, node.AttachT, node.BranchSide == 0,
+                        _order[parentIndex] == 0, in shape, cfg);
                     double upper = cap > thickness ? cap : thickness;
                     if (thickened > upper) thickened = upper;
                 }
@@ -149,13 +157,13 @@ namespace PocketArbor.Domain.Growth
             }
 
             // 6. Shoot spawning.
-            if (tree.Count < maxNodes && g > 0.0) SpawnShoots(tree, ref state, species, g, maxNodes);
+            if (tree.Count < maxNodes && g > 0.0) SpawnShoots(tree, ref state, species, in shape, g, maxNodes);
 
             // 7. Ages always change, so the node table always mutates.
             tree.MarkChanged();
         }
 
-        void SpawnShoots(TreeGraph tree, ref GrowthState state, SpeciesConfig species, double g, int maxNodes)
+        void SpawnShoots(TreeGraph tree, ref GrowthState state, SpeciesConfig species, in ShapeParams shape, double g, int maxNodes)
         {
             GrowthConfig cfg = _config;
 
@@ -182,10 +190,10 @@ namespace PocketArbor.Domain.Growth
                 if (candidateCount == 0) break;
 
                 ShootDraws u = ShootDraws.Next(_rng);
-                double selectionSum = ComputeSelectionWeights(tree, species, candidateCount);
+                double selectionSum = ComputeSelectionWeights(tree, species, shape.DomeWeightMultiplier, candidateCount);
                 int parentIndex = PickParent(candidateCount, u.U1 * selectionSum);
                 if (parentIndex < 0) continue; // Σs = 0: the shoot burns, its 8 draws are spent (stream layout kept).
-                NodeData shoot = ShootBuilder.Build(tree, parentIndex, in u, cfg, species);
+                NodeData shoot = ShootBuilder.Build(tree, parentIndex, in u, cfg, species, in shape);
                 tree.Append(shoot);
             }
 
@@ -225,8 +233,9 @@ namespace PocketArbor.Domain.Growth
         /// lateral slot is free, else 0; trunk chain with an apical child — TierWeight; otherwise InPad ? PadWeight : InteriorWeight
         /// (the crown axis too, but 0 while its apical delay lasts and both lateral slots are taken).
         /// BackBud_i = BackBudWeightMultiplier when BackBudDist ≤ BackBudRadiusEdges ∧ ord ≥ 1, else 1.
+        /// ⚑Q §1.4.4: × DomeWeightMultiplier for the dome subtree (crown-axis nodes and all their descendants).
         /// </summary>
-        double ComputeSelectionWeights(TreeGraph tree, SpeciesConfig species, int candidateCount)
+        double ComputeSelectionWeights(TreeGraph tree, SpeciesConfig species, double domeWeight, int candidateCount)
         {
             GrowthConfig cfg = _config;
             ReadOnlySpan<NodeData> nodes = tree.Nodes;
@@ -244,6 +253,7 @@ namespace PocketArbor.Domain.Growth
                 if (lateralOnly && !slotFree) role = 0.0;
                 else if (_shape.IsTrunkChain(i)) role = _shape.ApicalChild(i) < 0 && !lateralOnly ? cfg.ApicalDominanceWeight : cfg.TierWeight;
                 else role = _shape.InPad(i) ? cfg.PadWeight : cfg.InteriorWeight;
+                if (_shape.InDome(i)) role *= domeWeight;
                 if (!axis && _shape.BackBudDist(i) <= cfg.BackBudRadiusEdges) role *= cfg.BackBudWeightMultiplier;
                 double s = _weights[c] * role;
                 _selectionWeights[c] = s;

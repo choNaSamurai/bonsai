@@ -23,12 +23,12 @@ namespace PocketArbor.Domain.Tests.Growth
             var c = GrowthConfig.CreateDefault();
             Assert.DoesNotThrow(c.Validate);
             // Proposed values kept.
-            Assert.AreEqual(0.90, c.TrunkSegmentDecay);
+            Assert.That(c.TrunkSegmentDecay, Is.InRange(0.72, 0.84), "⚑Q §1.4.8 range (Proposed 0.78)");
             Assert.AreEqual(22.5, c.TrunkSegmentLength);
             Assert.AreEqual(0.08, c.TrunkSegmentJitter);
             Assert.AreEqual(0.88, c.TrunkSwayDecay);
             Assert.AreEqual(0.5, c.TrunkSwayBendGain);
-            Assert.AreEqual(0.35, c.TrunkBaseSwayRatio);
+            Assert.That(c.TrunkBaseSwayRatio, Is.InRange(0.2, 0.5), "PA-102P range (Proposed 0.35)");
             Assert.AreEqual(14, c.BackBudDays);
             Assert.AreEqual(2, c.BackBudRadiusEdges);
             Assert.AreEqual(0.23, c.BaseGrowthProbability, "AC17: tempo within ±15% without a change");
@@ -47,16 +47,18 @@ namespace PocketArbor.Domain.Tests.Growth
             var k = SpeciesConfig.Kuromatsu();
             var m = SpeciesConfig.Momiji();
             var y = SpeciesConfig.Yamazakura();
-            Assert.AreEqual(new[] { 32.0, 30.0, 26.0 }, new[] { k.TrunkSwayDeg, m.TrunkSwayDeg, y.TrunkSwayDeg });
+            Assert.AreEqual(new[] { 32.0, 26.0 }, new[] { k.TrunkSwayDeg, y.TrunkSwayDeg });
+            Assert.That(m.TrunkSwayDeg, Is.InRange(26.0, 34.0), "PA-102P range 30 ± 4°");
             Assert.AreEqual(new[] { 70.0, 8.0 }, new[] { k.CrownLateralAngleMeanDeg, k.CrownLateralAngleSpreadDeg });
-            Assert.AreEqual(new[] { 55.0, 10.0 }, new[] { m.CrownLateralAngleMeanDeg, m.CrownLateralAngleSpreadDeg });
+            Assert.That(m.CrownLateralAngleMeanDeg, Is.InRange(50.0, 68.0), "⚑Q §1.4.4 / §1.4.8 (Proposed 60°)");
+            Assert.AreEqual(10.0, m.CrownLateralAngleSpreadDeg);
             Assert.AreEqual(new[] { 60.0, 10.0 }, new[] { y.CrownLateralAngleMeanDeg, y.CrownLateralAngleSpreadDeg });
         }
 
         [Test]
-        public void GrowthRules_Version_IsTwoForPa102P()
+        public void GrowthRules_Version_IsThreeForPa102Q()
         {
-            Assert.AreEqual(2, GrowthRules.Version, "ADR-0003 §8: 1 = PA-102S, 2 = PA-102P");
+            Assert.AreEqual(3, GrowthRules.Version, "ADR-0003 §8: 1 = PA-102S, 2 = PA-102P, 3 = PA-102Q");
         }
 
         // ---- AC10: apical delay of the trunk --------------------------------------------------------------

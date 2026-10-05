@@ -27,6 +27,14 @@ namespace PocketArbor.Domain.Growth
         public static NodeData Build(TreeGraph tree, int parentIndex, in ShootDraws u, GrowthConfig config, SpeciesConfig species,
             bool applyApicalDelay = true)
         {
+            ShapeParams shape = ShapeParams.Resolve(config, species);
+            return Build(tree, parentIndex, in u, config, species, in shape, applyApicalDelay);
+        }
+
+        /// <summary>Same as above with the shape parameters resolved once by the caller (DailyStep — once per day, ADR-0010).</summary>
+        public static NodeData Build(TreeGraph tree, int parentIndex, in ShootDraws u, GrowthConfig config, SpeciesConfig species, in ShapeParams shape,
+            bool applyApicalDelay = true)
+        {
             ReadOnlySpan<NodeData> nodes = tree.Nodes;
             NodeData parent = nodes[parentIndex];
             TreeGenome genome = tree.Genome;
@@ -38,7 +46,8 @@ namespace PocketArbor.Domain.Growth
             int parentOrderEff = parentCrown ? 1 : parentOrder;
 
             // Children of the parent: apical presence, occupied lateral slots, side of the newest lateral.
-            double slotT0 = parentIndex == 0 ? config.TrunkBaseSlotT0 : config.LateralSlotT0;
+            // ⚑Q BALANCE §1.4.4 lever: crown-axis laterals have their own slot 0 (default = LateralSlotT0).
+            double slotT0 = parentIndex == 0 ? config.TrunkBaseSlotT0 : parentCrown ? config.CrownLateralSlotT0 : config.LateralSlotT0;
             double slotT1 = parentIndex == 0 ? config.TrunkBaseSlotT1 : config.LateralSlotT1;
             double slotBoundary = 0.5 * (slotT0 + slotT1);
             bool hasApical = false;
@@ -75,7 +84,7 @@ namespace PocketArbor.Domain.Growth
                 {
                     role = Role.TrunkSegment;
                     orderEff = 0;
-                    worldDeg = TrunkSegmentWorldAngleDeg(depth, genome, config, species, jitter);
+                    worldDeg = TrunkSegmentWorldAngleDeg(depth, genome, in shape, config, jitter);
                 }
                 else if (parentChain || parentCrown)
                 {
@@ -89,7 +98,7 @@ namespace PocketArbor.Domain.Growth
                     role = Role.Continuation;
                     orderEff = parentOrderEff;
                     double parentDeg = parentWorld / GrowthFormulas.DegToRad;
-                    worldDeg = parentDeg + (GrowthFormulas.SignNonZero(parentDeg) * HorizontalDeg - parentDeg) * GrowthFormulas.Clamp01(species.BranchDroop)
+                    worldDeg = parentDeg + (GrowthFormulas.SignNonZero(parentDeg) * HorizontalDeg - parentDeg) * GrowthFormulas.Clamp01(shape.BranchDroop)
                         + config.ApicalAngleJitterDeg * jitter;
                 }
                 relative = worldDeg * GrowthFormulas.DegToRad - parentWorld;
@@ -110,8 +119,8 @@ namespace PocketArbor.Domain.Growth
                     side = (sbyte)(slot == 1 ? tierSide : -tierSide);
                     // §1.3.2 apex dome: laterals of the chain top (k = TrunkChainSegments − 1) before the crown axis grows.
                     bool dome = !hasApical && parent.Depth == config.TrunkChainSegments - 1;
-                    double mean = dome ? species.CrownLateralAngleMeanDeg : species.PrimaryAngleMeanDeg;
-                    double spread = dome ? species.CrownLateralAngleSpreadDeg : species.PrimaryAngleSpreadDeg;
+                    double mean = dome ? shape.CrownLateralAngleMeanDeg : shape.PrimaryAngleMeanDeg;
+                    double spread = dome ? shape.CrownLateralAngleSpreadDeg : shape.PrimaryAngleSpreadDeg;
                     double worldDeg = side * GrowthFormulas.Triangular(mean, spread, u.U2, u.U3);
                     relative = worldDeg * GrowthFormulas.DegToRad - parentWorld;
                 }
@@ -122,7 +131,7 @@ namespace PocketArbor.Domain.Growth
                     if (parentCrown)
                     {
                         // ⚑P BALANCE §1.3.2: laterals of the crown axis take a world angle (apex dome), not a relative one.
-                        double worldDeg = side * GrowthFormulas.Triangular(species.CrownLateralAngleMeanDeg, species.CrownLateralAngleSpreadDeg, u.U2, u.U3);
+                        double worldDeg = side * GrowthFormulas.Triangular(shape.CrownLateralAngleMeanDeg, shape.CrownLateralAngleSpreadDeg, u.U2, u.U3);
                         relative = worldDeg * GrowthFormulas.DegToRad - parentWorld;
                     }
                     else
@@ -140,7 +149,8 @@ namespace PocketArbor.Domain.Growth
             switch (role)
             {
                 case Role.TrunkSegment:
-                    curvature = GrowthFormulas.Triangular(0.0, config.TrunkCurvatureJitter, u.U6, u.U7);
+                    // ⚑Q BALANCE §1.4.7: chain Curvature × max(σ, TrunkSwayJitterMinScale) (× 1 for Moyogi).
+                    curvature = GrowthFormulas.Triangular(0.0, config.TrunkCurvatureJitter, u.U6, u.U7) * shape.JitterScale;
                     break;
                 case Role.CrownAxis:
                     curvature = GrowthFormulas.Triangular(0.0, species.CurvatureSpread, u.U6, u.U7);
@@ -154,7 +164,8 @@ namespace PocketArbor.Domain.Growth
                     break;
             }
 
-            double targetLength = TargetLength(role, depth, orderEff, u.U5, config);
+            double targetLength = TargetLength(role, depth, orderEff, u.U5, config, in shape,
+                AxisFactor(nodes, parentIndex, role, parentChain, parentCrown, parentOrder, config, in shape));
 
             return new NodeData
             {
@@ -162,7 +173,7 @@ namespace PocketArbor.Domain.Growth
                 Depth = (byte)depth,
                 Length = config.ShootInitialLength,
                 TargetLength = targetLength,
-                Thickness = NewShootThickness(config.ShootInitialThickness, depth, parent.Thickness, attachT, apical, config),
+                Thickness = NewShootThickness(config.ShootInitialThickness, depth, parent.Thickness, attachT, apical, parentOrder == 0, in shape, config),
                 BaseAngle = angle,
                 CurrentAngle = angle,
                 Curvature = curvature,
@@ -182,21 +193,42 @@ namespace PocketArbor.Domain.Growth
         /// branch continuation — §1.1 base × BranchApicalLengthMultiplier × OrderLengthFactor^min(ordEff, 2);
         /// laterals — §1.1 base × OrderLengthFactor^min(ordEff, 2).
         /// </summary>
-        static double TargetLength(Role role, int depth, int orderEff, double u5, GrowthConfig config)
+        /// <remarks>⚑Q BALANCE §1.4.3 / §1.4.4: <paramref name="axisFactor"/> = PrimaryLengthFactor (ord-1 nodes of a primary axis),
+        /// CrownLateralLengthFactor (crown-axis laterals and their continuations) or 1, multiplied last.</remarks>
+        static double TargetLength(Role role, int depth, int orderEff, double u5, GrowthConfig config, in ShapeParams shape, double axisFactor)
         {
             if (role == Role.TrunkSegment)
             {
-                return config.TrunkSegmentLength * Math.Pow(config.TrunkSegmentDecay, depth - 1)
+                return shape.TrunkSegmentLength * Math.Pow(shape.TrunkSegmentDecay, depth - 1)
                     * (1.0 + config.TrunkSegmentJitter * (2.0 * u5 - 1.0));
             }
             double length = config.ShootBaseLength * Math.Pow(config.ShootLengthDecay, depth - 1)
                 * (1.0 + config.ShootLengthJitter * (2.0 * u5 - 1.0));
             switch (role)
             {
-                case Role.CrownAxis: return length * config.ApicalLengthMultiplier * config.CrownAxisLengthFactor;
-                case Role.Continuation: return length * config.BranchApicalLengthMultiplier * OrderLengthMultiplier(orderEff, config);
-                default: return length * OrderLengthMultiplier(orderEff, config);
+                case Role.CrownAxis: return length * config.ApicalLengthMultiplier * shape.CrownAxisLengthFactor;
+                case Role.Continuation: return length * config.BranchApicalLengthMultiplier * OrderLengthMultiplier(orderEff, config) * axisFactor;
+                default: return length * OrderLengthMultiplier(orderEff, config) * axisFactor;
             }
+        }
+
+        /// <summary>
+        /// ⚑Q BALANCE §1.4.3 / §1.4.4 length factor of the new shoot's axis: a primary (lateral of a chain node) and the apical
+        /// continuations of an ord-1 axis rooted on the chain — PrimaryLengthFactor; a crown-axis lateral and the continuations of an
+        /// ord-1 axis rooted on the crown axis — CrownLateralLengthFactor; otherwise 1. No RNG, O(depth), allocation-free.
+        /// </summary>
+        static double AxisFactor(ReadOnlySpan<NodeData> nodes, int parentIndex, Role role, bool parentChain, bool parentCrown, int parentOrder,
+            GrowthConfig config, in ShapeParams shape)
+        {
+            if (role == Role.Primary) return shape.PrimaryLengthFactor;
+            if (role == Role.Secondary) return parentCrown ? shape.CrownLateralLengthFactor : 1.0;
+            if (role != Role.Continuation || parentOrder != 1) return 1.0;
+            int root = parentIndex;
+            while (nodes[root].BranchSide == 0 && nodes[root].ParentIndex >= 0) root = nodes[root].ParentIndex;
+            int axisParent = nodes[root].ParentIndex;
+            if (axisParent < 0) return 1.0;
+            // The parent of an ord-1 axis root is an ord-0 node: chain (Depth < segments) or crown axis.
+            return nodes[axisParent].Depth < config.TrunkChainSegments ? shape.PrimaryLengthFactor : shape.CrownLateralLengthFactor;
         }
 
         /// <summary>⚑P BALANCE §1.3.1: AgeDays of an ord-0 node of index k = Depth is below TrunkApicalDelayBaseDays + StepDays·k.</summary>
@@ -228,8 +260,10 @@ namespace PocketArbor.Domain.Growth
                 // BALANCE §1.2.8: interpretation — u5 is unused, so the twig's target length is the primary-branch
                 // length of depth 1 without jitter: ShootBaseLength · OrderLengthFactor^1.
                 TargetLength = config.ShootBaseLength * OrderLengthMultiplier(1, config),
+                // ⚑Q §1.4.3: a lateral of #0 (ord 0) — PrimaryThicknessRatio ceiling.
                 Thickness = Math.Min(config.SaplingTwigThickness,
-                    Math.Min(GrowthFormulas.MaxThicknessAt(1, config), GrowthFormulas.ThicknessCap(trunk.Thickness, attachT, false, config))),
+                    Math.Min(GrowthFormulas.MaxThicknessAt(1, config), GrowthFormulas.AxisChildThicknessCap(trunk.Thickness, attachT, false,
+                        config.TrunkChainTaperRatio, config.PrimaryThicknessRatio, config))),
                 BaseAngle = angle,
                 CurrentAngle = angle,
                 Curvature = 0.0,
@@ -243,25 +277,42 @@ namespace PocketArbor.Domain.Growth
         }
 
         /// <summary>
-        /// θ_k = lean + TierPhase·(−1)^k·A_k + TrunkSwayJitterDeg·jitter (BALANCE §1.2.3 with ⚑P §1.3.1 numbers),
-        /// degrees from vertical. <paramref name="jitter"/> = u2 + u3 − 1.
+        /// ⚑Q BALANCE §1.4.7: θ_k = lean + λ·TierPhase + TierPhase·(−1)^k·A_k·σ + TrunkSwayJitterDeg·max(σ, jitterMin)·jitter,
+        /// degrees from vertical (§1.3.1 at σ = 1, λ = 0). <paramref name="jitter"/> = u2 + u3 − 1.
         /// </summary>
         public static double TrunkSegmentWorldAngleDeg(int k, in TreeGenome genome, GrowthConfig config, SpeciesConfig species, double jitter)
         {
-            double lean = genome.BendBias * config.TrunkBendScaleDeg;
-            double alternation = (k & 1) == 0 ? 1.0 : -1.0;
-            return lean + TreeShapeAnalysis.TierPhase(genome.Seed) * alternation * TrunkSwayAmplitudeDeg(k, genome, config, species)
-                + config.TrunkSwayJitterDeg * jitter;
+            ShapeParams shape = ShapeParams.Resolve(config, species);
+            return TrunkSegmentWorldAngleDeg(k, genome, in shape, config, jitter);
         }
 
-        /// <summary>⚑P BALANCE §1.3.1: A_k = TrunkSwayDeg·(1 + TrunkSwayBendGain·|bendBias|)·TrunkSwayDecay^(k−1).</summary>
-        public static double TrunkSwayAmplitudeDeg(int k, in TreeGenome genome, GrowthConfig config, SpeciesConfig species) =>
-            species.TrunkSwayDeg * (1.0 + config.TrunkSwayBendGain * Math.Abs(genome.BendBias)) * Math.Pow(config.TrunkSwayDecay, k - 1);
+        public static double TrunkSegmentWorldAngleDeg(int k, in TreeGenome genome, in ShapeParams shape, GrowthConfig config, double jitter)
+        {
+            int tierPhase = TreeShapeAnalysis.TierPhase(genome.Seed);
+            double lean = genome.BendBias * config.TrunkBendScaleDeg + shape.LeanOffsetDeg * tierPhase;
+            double alternation = (k & 1) == 0 ? 1.0 : -1.0;
+            return lean + tierPhase * alternation * TrunkSwayAmplitudeDeg(k, genome, in shape, config) * shape.SwayScale
+                + config.TrunkSwayJitterDeg * shape.JitterScale * jitter;
+        }
 
-        /// <summary>⚑P BALANCE §1.3.1: world angle of #0 = lean + TierPhase·TrunkBaseSwayRatio·A_1 (degrees, before the Pot Lip clamp).</summary>
-        public static double TrunkBaseWorldAngleDeg(in TreeGenome genome, GrowthConfig config, SpeciesConfig species) =>
-            genome.BendBias * config.TrunkBendScaleDeg
-            + TreeShapeAnalysis.TierPhase(genome.Seed) * config.TrunkBaseSwayRatio * TrunkSwayAmplitudeDeg(1, genome, config, species);
+        /// <summary>⚑P BALANCE §1.3.1: A_k = TrunkSwayDeg·(1 + TrunkSwayBendGain·|bendBias|)·TrunkSwayDecay^(k−1) (before σ).</summary>
+        public static double TrunkSwayAmplitudeDeg(int k, in TreeGenome genome, GrowthConfig config, SpeciesConfig species)
+        {
+            ShapeParams shape = ShapeParams.Resolve(config, species);
+            return TrunkSwayAmplitudeDeg(k, genome, in shape, config);
+        }
+
+        public static double TrunkSwayAmplitudeDeg(int k, in TreeGenome genome, in ShapeParams shape, GrowthConfig config) =>
+            shape.TrunkSwayDeg * (1.0 + config.TrunkSwayBendGain * Math.Abs(genome.BendBias)) * Math.Pow(shape.TrunkSwayDecay, k - 1);
+
+        /// <summary>⚑Q BALANCE §1.4.7: world angle of #0 = lean + λ·TierPhase + TierPhase·TrunkBaseSwayRatio·A_1·σ (degrees, before Pot Lip).</summary>
+        public static double TrunkBaseWorldAngleDeg(in TreeGenome genome, GrowthConfig config, SpeciesConfig species)
+        {
+            ShapeParams shape = ShapeParams.Resolve(config, species);
+            int tierPhase = TreeShapeAnalysis.TierPhase(genome.Seed);
+            return genome.BendBias * config.TrunkBendScaleDeg + shape.LeanOffsetDeg * tierPhase
+                + tierPhase * shape.TrunkBaseSwayRatio * TrunkSwayAmplitudeDeg(1, genome, in shape, config) * shape.SwayScale;
+        }
 
         /// <summary>OrderLengthFactor^min(ordEff, 2) (BALANCE §1.2.6).</summary>
         public static double OrderLengthMultiplier(int orderEff, GrowthConfig config)
@@ -270,11 +321,13 @@ namespace PocketArbor.Domain.Growth
             return orderEff == 1 ? config.OrderLengthFactor : config.OrderLengthFactor * config.OrderLengthFactor;
         }
 
-        /// <summary>max(MinShootThickness, min(initial, th_max(d), th_cap)) (BALANCE §1.2.2).</summary>
-        public static double NewShootThickness(double initial, int depth, double parentThickness, double attachT, bool apical, GrowthConfig config)
+        /// <summary>max(MinShootThickness, min(initial, th_max(d), th_cap)) (BALANCE §1.2.2; ⚑Q §1.4.1(б) / §1.4.3 for children of ord-0 parents).</summary>
+        public static double NewShootThickness(double initial, int depth, double parentThickness, double attachT, bool apical, bool parentOrd0,
+            in ShapeParams shape, GrowthConfig config)
         {
-            double cap = GrowthFormulas.ThicknessCap(parentThickness, attachT, apical, config);
-            double thickness = Math.Min(initial, Math.Min(GrowthFormulas.MaxThicknessAt(depth, config), cap));
+            double cap = GrowthFormulas.ThicknessCap(parentThickness, attachT, apical, parentOrd0, in shape, config);
+            bool ord0 = parentOrd0 && apical;
+            double thickness = Math.Min(initial, Math.Min(GrowthFormulas.MaxThicknessAt(depth, ord0, shape.TrunkChainDepthScaleFactor, config), cap));
             return thickness > config.MinShootThickness ? thickness : config.MinShootThickness;
         }
 

@@ -106,19 +106,20 @@ namespace PocketArbor.DevTools.GrowthPreview
 
         // ---- Pot, soil, background ----
         /// <summary>Trunk base (y = 0) sits this share of the way from the front to the back inner edge of the pot opening.</summary>
-        public float TreeBaseInOpening = 0.45f;
+        /// <remarks>PA-102Q (TD-041): 0.45 → 0.70 — the trunk base 6.3 units below the pot top (was 9.3): in the L2 reference the root crown
+        /// starts near the back rim, and BALANCE §1.4 counts heights from there; 1.0 (back inner edge) left the roots over the bare rim.</remarks>
+        public float TreeBaseInOpening = 0.70f;
 
         /// <summary>Pot without an opening (fallback): soil ground line this high above the Pot Lip.</summary>
         public float SoilSurfaceY = 0.4f;
 
         /// <summary>Minimal soil strip width relative to the pot inner width (the strip keeps its own aspect).</summary>
-        public float SoilWidthRatio = 1.02f;
+        public float SoilWidthRatio = 0.88f; // PA-102Q (TA): 1.02 drew the strip 1.15× wider than the pot it was cut for
 
-        /// <summary>Soil-front band: ground line height (world), width share of the opening, soft edge share, band depth below the ground.</summary>
-        public float SoilFrontGroundY = -0.4f;
+        /// <summary>Soil-front band (ground line and moss height — TreeRenderConfig.SoilFrontGroundY / SoilFrontMossHeightUnits): width share of the opening, soft edge share, band depth below the ground.</summary>
         public float SoilFrontWidthRatio = 0.92f;
         public float SoilFrontEdgeFade = 0.12f;
-        public float SoilFrontDepthShare = 0.3f;
+        public float SoilFrontDepthShare = 0.12f; // PA-102Q (TA): band below the ground line 5.5 → 2.2 units (roots on the moss stay visible)
 
         public float SoilFrontBandPx(int soilHeight) => SoilFrontDepthShare * soilHeight;
 

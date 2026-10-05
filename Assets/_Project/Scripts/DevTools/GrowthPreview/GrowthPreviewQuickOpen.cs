@@ -34,6 +34,12 @@ namespace PocketArbor.DevTools.GrowthPreview
         [MenuItem("Pocket Arbor/Show Bonsai/Momiji — Wild, day 80", priority = 2)]
         static void ShowMomijiWild() => Show(SpeciesId.Momiji, styled: false, day: 80, overlay: false);
 
+        [MenuItem("Pocket Arbor/Show Bonsai/Momiji — Chokkan (formal upright), Styled, day 100", priority = 10)]
+        static void ShowMomijiChokkan() => Show(SpeciesId.Momiji, styled: true, day: 100, overlay: false, style: ShapeStyle.Chokkan);
+
+        [MenuItem("Pocket Arbor/Show Bonsai/Momiji — Shakan (slanting), Styled, day 100", priority = 11)]
+        static void ShowMomijiShakan() => Show(SpeciesId.Momiji, styled: true, day: 100, overlay: false, style: ShapeStyle.Shakan);
+
         [MenuItem("Pocket Arbor/Show Bonsai/Kuromatsu — Styled, day 100", priority = 20)]
         static void ShowKuromatsu() => Show(SpeciesId.Kuromatsu, styled: true, day: 100, overlay: false);
 
@@ -46,13 +52,19 @@ namespace PocketArbor.DevTools.GrowthPreview
         [MenuItem("Pocket Arbor/Timelapse/Momiji — Wild, day 0 → 100", priority = 41)]
         static void TimelapseMomijiWild() => Show(SpeciesId.Momiji, styled: false, day: 0, overlay: false, timelapse: true);
 
+        [MenuItem("Pocket Arbor/Timelapse/Momiji — Chokkan, Styled, day 0 → 100", priority = 50)]
+        static void TimelapseMomijiChokkan() => Show(SpeciesId.Momiji, styled: true, day: 0, overlay: false, timelapse: true, style: ShapeStyle.Chokkan);
+
+        [MenuItem("Pocket Arbor/Timelapse/Momiji — Shakan, Styled, day 0 → 100", priority = 51)]
+        static void TimelapseMomijiShakan() => Show(SpeciesId.Momiji, styled: true, day: 0, overlay: false, timelapse: true, style: ShapeStyle.Shakan);
+
         [MenuItem("Pocket Arbor/Timelapse/Kuromatsu — Styled, day 0 → 100", priority = 42)]
         static void TimelapseKuromatsu() => Show(SpeciesId.Kuromatsu, styled: true, day: 0, overlay: false, timelapse: true);
 
         [MenuItem("Pocket Arbor/Timelapse/Yamazakura — Styled, day 0 → 100", priority = 43)]
         static void TimelapseYamazakura() => Show(SpeciesId.Yamazakura, styled: true, day: 0, overlay: false, timelapse: true);
 
-        static void Show(SpeciesId species, bool styled, int day, bool overlay, bool timelapse = false)
+        static void Show(SpeciesId species, bool styled, int day, bool overlay, bool timelapse = false, ShapeStyle style = ShapeStyle.Moyogi)
         {
             if (EditorApplication.isPlaying)
             {
@@ -80,6 +92,7 @@ namespace PocketArbor.DevTools.GrowthPreview
             so.FindProperty("_day").intValue = day;
             so.FindProperty("_referenceOverlay").boolValue = overlay;
             so.FindProperty("_referenceAlpha").floatValue = 0.5f;
+            so.FindProperty("_shapeStyle").intValue = (int)style;
             so.ApplyModifiedPropertiesWithoutUndo();
 
             // SessionState survives the domain reload that happens when entering Play mode.

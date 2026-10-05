@@ -28,6 +28,7 @@ namespace PocketArbor.Domain.Tree
         readonly bool[] _trunkChain = new bool[TreeGraph.Capacity];
         readonly bool[] _crownAxis = new bool[TreeGraph.Capacity];
         readonly bool[] _primary = new bool[TreeGraph.Capacity];
+        readonly bool[] _dome = new bool[TreeGraph.Capacity];
         readonly int[] _axisRemain = new int[TreeGraph.Capacity];
         readonly int[] _backBudDist = new int[TreeGraph.Capacity];
         readonly bool[] _inPad = new bool[TreeGraph.Capacity];
@@ -117,6 +118,7 @@ namespace PocketArbor.Domain.Tree
                 _trunkChain[i] = axis && nodes[i].Depth < trunkChainSegments;
                 _crownAxis[i] = axis && !_trunkChain[i];
                 _primary[i] = lateral && parent >= 0 && _trunkChain[parent];
+                _dome[i] = _crownAxis[i] || (parent >= 0 && _dome[parent]);
                 if (_trunkChain[i]) chainLength++;
             }
             TrunkChainLength = chainLength;
@@ -178,6 +180,9 @@ namespace PocketArbor.Domain.Tree
 
         /// <summary>ord = 0 ∧ Depth ≥ TrunkChainSegments — the leader above the last trunk segment (apex dome).</summary>
         public bool IsCrownAxis(int index) => _crownAxis[index];
+
+        /// <summary>⚑Q BALANCE §1.4.4: the dome subtree — a crown-axis node or any descendant of one (its laterals and all they bear).</summary>
+        public bool InDome(int index) => _dome[index];
 
         /// <summary>Lateral child of a trunk-chain node (a tier).</summary>
         public bool IsPrimary(int index) => _primary[index];

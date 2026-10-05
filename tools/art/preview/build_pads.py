@@ -1,5 +1,6 @@
 import sys, json, os, colorsys
 from pads import *
+import pine
 
 l2 = Image.open(SRC + 'Section_0/realism_l2_painterly.jpg').convert('RGB')
 nt = Image.open(SRC + 'A_Concept/concept_night.jpg').convert('RGB')
@@ -150,16 +151,22 @@ def build(name, prefix, sprites, AW=2048, AH=1024):
     return rgb, meta
 
 if __name__ == '__main__':
+    # usage: python3 build_pads.py [momiji] [kuromatsu] [yamazakura]   (no args = all three)
+    only = set(sys.argv[1:]) or {'momiji', 'kuromatsu', 'yamazakura'}
     os.makedirs(OUT, exist_ok=True)
-    mom = []
-    for i, (box, cut) in enumerate(MOMIJI):
-        mom.append(extract(l2, box, 'day', cut, seed=i, close_k=(17 if i == 0 else 7)))
-    kur = []
-    for i, (box, cut) in enumerate(KURO):
-        kur.append(dayify(extract(nt, box, 'night', cut, seed=i, close_k=(17 if i == 0 else 11))))
-    momU = [upscale_rgba(s) for s in mom]
-    kurU = [upscale_rgba(s) for s in kur]
-    yamU = [upscale_rgba(to_yamazakura(s)) for s in mom]
-    for nm, pf, sp in (('pads_momiji', 'm', momU), ('pads_kuromatsu', 'k', kurU), ('pads_yamazakura', 'y', yamU)):
+    jobs = []
+    if only & {'momiji', 'yamazakura'}:
+        mom = []
+        for i, (box, cut) in enumerate(MOMIJI):
+            mom.append(extract(l2, box, 'day', cut, seed=i, close_k=(17 if i == 0 else 7)))
+        if 'momiji' in only: jobs.append(('pads_momiji', 'm', [upscale_rgba(s) for s in mom]))
+        if 'yamazakura' in only: jobs.append(('pads_yamazakura', 'y', [upscale_rgba(to_yamazakura(s)) for s in mom]))
+    if 'kuromatsu' in only:
+        if os.environ.get('KURO_FROM_NIGHT'):   # PA-103S cut-outs of concept_night (thin, notched) — kept for comparison
+            kur = [upscale_rgba(dayify(extract(nt, box, 'night', cut, seed=i, close_k=(17 if i == 0 else 11)))) for i, (box, cut) in enumerate(KURO)]
+        else:                                   # PA-102Q: painted needle-fan shelves (pine.py): dense, no notches, + S tufts
+            kur = pine.kuromatsu_sprites()
+        jobs.append(('pads_kuromatsu', 'k', kur))
+    for nm, pf, sp in jobs:
         _, meta = build(nm, pf, sp)
         print(nm, [(p['name'], p['x'], p['y'], p['w'], p['h'], p['pivotY'], p['size']) for p in meta['pads']])

@@ -1,0 +1,50 @@
+{
+  "pxPerUnit": 24.0,
+  "pads": [
+    {
+      "name": "t0",
+      "x": 0,
+      "y": 0,
+      "w": 198,
+      "h": 91,
+      "pivotX": 0.5,
+      "pivotY": 0.13187,
+      "size": "S",
+      "padPx": 12,
+      "innerW": 174,
+      "innerH": 67,
+      "widthUnits": 7.25,
+      "heightUnits": 2.79
+    },
+    {
+      "name": "t1",
+      "x": 200,
+      "y": 0,
+      "w": 164,
+      "h": 80,
+      "pivotX": 0.5,
+      "pivotY": 0.15,
+      "size": "S",
+      "padPx": 12,
+      "innerW": 140,
+      "innerH": 56,
+      "widthUnits": 5.83,
+      "heightUnits": 2.33
+    },
+    {
+      "name": "t2",
+      "x": 0,
+      "y": 93,
+      "w": 231,
+      "h": 99,
+      "pivotX": 0.5,
+      "pivotY": 0.12121,
+      "size": "S",
+      "padPx": 12,
+      "innerW": 207,
+      "innerH": 75,
+      "widthUnits": 8.62,
+      "heightUnits": 3.12
+    }
+  ]
+}

@@ -18,6 +18,9 @@ namespace PocketArbor.DevTools.GrowthPreview
     public sealed partial class TreePreviewMeshBuilder
     {
         const int SegmentSamples = 12;
+
+        /// <summary>ADR-0004 rev.4: extra ribbon sections of #0 inside the Gaussian flare (the flare is ~3 units tall, a section ~3 units).</summary>
+        const int FlareExtraSections = 7;
         const int DiscSegments = 18;
         const float BudRadius = 1.4f;
         const float PotLipOverhang = 4f;
@@ -58,6 +61,18 @@ namespace PocketArbor.DevTools.GrowthPreview
 
         public TreeRenderConfig Render => _render;
 
+        /// <summary>Sections of node <paramref name="i"/>'s ribbon and the parameter of section <paramref name="s"/>: #0 gets
+        /// <see cref="FlareExtraSections"/> more, packed towards the base (t ∝ (s/n)² on the first half), so the Gaussian flare is drawn.</summary>
+        int Sections(int i) => i == 0 && _render.NebariFlareProfile == NebariFlareProfile.Gaussian ? SegmentSamples + FlareExtraSections : SegmentSamples;
+
+        static float SectionT(int s, int sections, bool flare)
+        {
+            float u = s / (float)sections;
+            if (!flare) return u;
+            // Monotone and continuous: quadratic packing below the middle (dense at the base), linear above.
+            return u < 0.5f ? 2f * u * u : u;
+        }
+
         // ---- Read access for the PA-102P measurement harness (last build) ----
         public TreeShapeAnalysis Shape => _shape;
         public int NodeCount => _count;
@@ -76,6 +91,56 @@ namespace PocketArbor.DevTools.GrowthPreview
                 int next = _shape.ApicalChild(i);
                 i = next >= 0 && _shape.IsTrunkChain(next) ? next : -1;
             }
+        }
+
+        /// <summary>
+        /// ⚑Q BALANCE §1.4.0 «Профіль стовбура»: width of the trunk mesh (with the Nebari flare, without roots and collars) at the point of the
+        /// trunk-chain centre line whose height is <paramref name="y"/> (the lowest crossing); NaN if the chain does not reach it.
+        /// </summary>
+        public float TrunkWidthAtHeight(float y)
+        {
+            int i = 0;
+            while (i >= 0 && i < _count && _shape.IsTrunkChain(i))
+            {
+                float y0 = Eval(i, 0f).y, y1 = Eval(i, 1f).y;
+                if ((y0 - y) * (y1 - y) <= 0f && !Mathf.Approximately(y0, y1))
+                {
+                    float lo = 0f, hi = 1f;
+                    bool rising = y1 > y0;
+                    for (int k = 0; k < 24; k++)
+                    {
+                        float mid = 0.5f * (lo + hi);
+                        if ((Eval(i, mid).y < y) == rising) lo = mid;
+                        else hi = mid;
+                    }
+                    float t = 0.5f * (lo + hi);
+                    return Width(i, t, Eval(i, t).y);
+                }
+                int next = _shape.ApicalChild(i);
+                i = next >= 0 && _shape.IsTrunkChain(next) ? next : -1;
+            }
+            return float.NaN;
+        }
+
+        /// <summary>Height of the top of the trunk chain (tip of its last node) of the last build.</summary>
+        public float TrunkChainTopY
+        {
+            get
+            {
+                float top = 0f;
+                for (int i = 0; i < _count; i++) if (_shape.IsTrunkChain(i)) top = Mathf.Max(top, _tip[i].y);
+                return top;
+            }
+        }
+
+        /// <summary>Mesh width of node <paramref name="i"/> at its base (no collar) and of its parent at the attachment point (§1.4.0 primaries).</summary>
+        public void BaseWidths(int i, out float own, out float parentAtAttach, out float attachY)
+        {
+            NodeData n = _nodes[i];
+            Vector2 attach = Eval(n.ParentIndex, (float)n.AttachT);
+            attachY = attach.y;
+            own = Width(i, 0f, attach.y);
+            parentAtAttach = Width(n.ParentIndex, (float)n.AttachT, attach.y);
         }
 
         /// <summary>AC20: base width with Nebari flare / trunk width at 2/3 of the trunk-chain height (last build).</summary>
@@ -259,13 +324,42 @@ namespace PocketArbor.DevTools.GrowthPreview
                 float s = Mathf.SmoothStep(0f, 1f, t / _render.JointBlend);
                 width = Mathf.Lerp(_tipWidth[node.ParentIndex], width, s);
             }
-            if (_shape.Order(i) == 0 && _th0 > 0f)
-            {
-                // Nebari base flare (BALANCE §1.2.4).
-                width *= 1f + _flare * Mathf.Exp(-Mathf.Max(0f, y) / (_render.NebariFlareHeightRatio * _th0));
-            }
+            if (_shape.Order(i) == 0 && _th0 > 0f) width *= 1f + _flare * FlareFalloff(i, t, y);
             return Mathf.Max(0.3f, width);
         }
+
+        /// <summary>
+        /// Nebari base flare fall-off at (node <paramref name="i"/>, <paramref name="t"/>, height <paramref name="y"/>) of an ord-0 node:
+        /// ⚑Q BALANCE §1.4.1(а) Gaussian e^{−(s/(h·th0))²}, s = arc length along the #0 axis from the soil (ADR-0004 rev.4 — follows a
+        /// leaning base; ≈ 0 above #0); PA-102P Exponential e^{−y/(h·th0)} over the height.
+        /// </summary>
+        float FlareFalloff(int i, float t, float y)
+        {
+            float scale = _render.NebariFlareHeightRatio * _th0;
+            if (scale <= 0f) return 0f;
+            if (_render.NebariFlareProfile == NebariFlareProfile.Exponential) return Mathf.Exp(-Mathf.Max(0f, y) / scale);
+            float s = i == 0 ? ArcLength0(t) : ArcLength0(1f) + t * (float)_nodes[i].Length;
+            float u = s / scale;
+            return u > 6f ? 0f : Mathf.Exp(-u * u);
+        }
+
+        /// <summary>Arc length of #0 from its base to <paramref name="t"/> (8-point polyline of the C1 curve).</summary>
+        float ArcLength0(float t)
+        {
+            const int steps = 8;
+            float length = 0f;
+            Vector2 previous = Eval(0, 0f);
+            for (int k = 1; k <= steps; k++)
+            {
+                Vector2 point = Eval(0, t * k / steps);
+                length += (point - previous).magnitude;
+                previous = point;
+            }
+            return length;
+        }
+
+        /// <summary>Half width of the trunk mesh (with flare) at arc parameter <paramref name="t"/> of #0.</summary>
+        public float TrunkHalfWidth(float t) => 0.5f * Width(0, t, Eval(0, t).y);
 
         /// <summary>
         /// ⚑P BALANCE §1.3.4 [RENDER]: share of node <paramref name="i"/> covered by bark — a bud shows ≤ BudBarkMaxLength; a terminal
@@ -290,9 +384,11 @@ namespace PocketArbor.DevTools.GrowthPreview
             int start = _vertices.Count;
             Vector2 previous = Eval(i, 0f);
             float tEnd = BarkEndT(i);
-            for (int s = 0; s <= SegmentSamples; s++)
+            int sections = Sections(i);
+            bool flare = sections != SegmentSamples;
+            for (int s = 0; s <= sections; s++)
             {
-                float t = tEnd * s / SegmentSamples;
+                float t = tEnd * SectionT(s, sections, flare);
                 Vector2 point = Eval(i, t);
                 Vector2 ahead = Eval(i, Mathf.Min(1f, t + 0.01f));
                 Vector2 behind = Eval(i, Mathf.Max(0f, t - 0.01f));
@@ -306,7 +402,7 @@ namespace PocketArbor.DevTools.GrowthPreview
                 if (trunkChain) _trunkSamples.Add(new Vector2(point.y, width));
                 previous = point;
             }
-            for (int s = 0; s < SegmentSamples; s++)
+            for (int s = 0; s < sections; s++)
             {
                 int a = start + s * 2;
                 _indices.Add(a); _indices.Add(a + 1); _indices.Add(a + 2);
@@ -341,9 +437,11 @@ namespace PocketArbor.DevTools.GrowthPreview
         {
             int count = NebariRootCount(growth);
             LastRootCount = count;
+            _rootTips.Clear();
             for (int r = 0; r < count; r++)
             {
                 NebariRoot(seed, r, count, _rootSamples);
+                RecordRootTip(_rootSamples);
                 AddRootRibbon(_rootSamples, Bark, BarkDark);
             }
         }
@@ -353,12 +451,19 @@ namespace PocketArbor.DevTools.GrowthPreview
             Mathf.Clamp((int)Math.Round(_render.NebariRootsMin + (_th0 - growth.TrunkInitialThickness) / _render.NebariThicknessPerRoot,
                 MidpointRounding.AwayFromZero), _render.NebariRootsMin, _render.NebariRootsMax);
 
+        /// <summary>Where each root of the last build dives under the moss: (x, moss line y, root width there) — SoilFront moss tufts.</summary>
+        public IReadOnlyList<Vector3> LastRootTips => _rootTips;
+
+        readonly List<Vector3> _rootTips = new List<Vector3>(8);
+        readonly List<Vector3> _rootRaw = new List<Vector3>(64);
+
         /// <summary>
-        /// Root r of <paramref name="count"/> as samples (x, y, width) (BALANCE §1.3.3): two C1 cubic segments — from the flared
-        /// base down-outwards at NebariRootDrop (35…55° below horizontal, hash), then easing to near-horizontal and ending below the
-        /// SoilFront ground line (hidden by moss); a cross wave of NebariRootWaviness·th0 (one period, hashed phase); width from the
-        /// base thickness (0.30…0.42·th0, alternating) to NebariRootTipRatio of it. Fan = slot table × 75° ± 10°; front roots (|fan| ≤ 25°)
-        /// × 0.6 shorter. Long/short and thick/thin alternate by index; everything else hashes (Seed, Id #0, salt) — not the PCG stream.
+        /// Root r of <paramref name="count"/> as samples (x, y, width), uniform in arc length (⚑Q BALANCE §1.4.2, ADR-0004 rev.4):
+        /// starts on the flare at NebariRootStartHeightRatio·th0, drops at NebariRootDrop (35…55°, hash) to the moss line, lies on the moss
+        /// (centre line ≥ moss line + NebariRootMossClearance) for the first 1 − NebariRootTipBuryRatio of its length, then dives under
+        /// the moss (only the last NebariRootTipBuryRatio is hidden). Width from the base (0.30…0.42·th0) to NebariRootTipRatio of it;
+        /// an upward-only wave of NebariRootWaviness·th0. Fan = slot table × 75° ± 10°; front roots (|fan| ≤ 25°) × 0.6 shorter.
+        /// Long/short and thick/thin alternate by index; everything else hashes (Seed, Id #0, salt) — not the PCG stream.
         /// </summary>
         public void NebariRoot(uint seed, int r, int count, List<Vector3> samples)
         {
@@ -379,37 +484,95 @@ namespace PocketArbor.DevTools.GrowthPreview
             float length = th0 * lengthFactor * (front ? _render.NebariFrontRootScale : 1f);
             float hw = Hash01(seed, trunkId, 223u + (uint)r);
             float baseWidth = th0 * Mathf.Lerp(_render.NebariRootThicknessMin, _render.NebariRootThicknessMax, even ? 0.55f + 0.45f * hw : 0.45f * hw);
+            float tipWidth = baseWidth * _render.NebariRootTipRatio;
             float drop = Mathf.Lerp(_render.NebariRootDropMinDeg, _render.NebariRootDropMaxDeg, Hash01(seed, trunkId, 227u + (uint)r)) * Mathf.Deg2Rad;
             float endDrop = _render.NebariRootEndDropDeg * Mathf.Deg2Rad;
+            float buryDrop = _render.NebariRootBuryDropDeg * Mathf.Deg2Rad;
             float phase = Hash01(seed, trunkId, 229u + (uint)r) * Mathf.PI * 2f;
+            float bury = Mathf.Clamp01(_render.NebariRootTipBuryRatio);
 
             // Projected horizontal reach: roots facing the viewer show less of their length sideways.
             float reach = length * Mathf.Max(0.35f, Mathf.Abs(sin));
-            float flareHalf = 0.5f * th0 * (1f + _flare);
-            var p0 = new Vector2(sin * flareHalf * 0.75f, _render.NebariRootStartHeight * th0);
-            var p2 = new Vector2(p0.x + dir * reach, -_render.NebariRootEndDepth);
-            float knee = Mathf.Clamp(_render.NebariRootKnee, 0.1f, 0.9f);
-            float kneeY = p2.y + (1f - knee) * reach * Mathf.Tan(2f * endDrop);
-            kneeY = Mathf.Min(kneeY, p0.y - 0.2f * (p0.y - p2.y));
-            var p1 = new Vector2(p0.x + dir * knee * reach, kneeY);
+            float moss = _render.MossLineY;
+            float startY = _render.NebariRootStartHeightRatio * th0;
+            float plateau = Mathf.Min(moss + _render.NebariRootMossClearance, startY);
+            float tStart = TrunkParamAtHeight(startY);
+            var p0 = new Vector2(Eval(0, tStart).x + sin * TrunkHalfWidth(tStart) * 0.8f, startY);
+            float dropRun = Mathf.Min(0.5f * reach, Mathf.Max(0f, startY - plateau) / Mathf.Max(0.2f, Mathf.Tan(drop)));
+            float buryRun = bury * reach;
+            float flatRun = Mathf.Max(0.05f * reach, reach - dropRun - buryRun);
+            var p1 = new Vector2(p0.x + dir * dropRun, plateau);
+            var p2 = new Vector2(p1.x + dir * flatRun, plateau);
+            var p3 = new Vector2(p2.x + dir * buryRun, moss - _render.NebariRootEndDepth - 0.5f * tipWidth);
             var t0 = new Vector2(dir * Mathf.Cos(drop), -Mathf.Sin(drop));
+            var t1 = new Vector2(dir, 0f);
             var t2 = new Vector2(dir * Mathf.Cos(endDrop), -Mathf.Sin(endDrop));
-            Vector2 t1 = ((p1 - p0).normalized + (p2 - p1).normalized).normalized;
+            var t3 = new Vector2(dir * Mathf.Cos(buryDrop), -Mathf.Sin(buryDrop));
 
-            const int perSegment = 8;
-            int total = 2 * perSegment;
-            for (int k = 0; k <= total; k++)
+            // Dense polyline of the three C1 Hermite segments, then resampled uniformly in arc length.
+            const int perSegment = 12;
+            _rootRaw.Clear();
+            AppendHermite(p0, t0, p1, t1, perSegment, true);
+            AppendHermite(p1, t1, p2, t2, perSegment, false);
+            AppendHermite(p2, t2, p3, t3, perSegment, false);
+            float total = 0f;
+            for (int k = 1; k < _rootRaw.Count; k++) total += ((Vector2)_rootRaw[k] - (Vector2)_rootRaw[k - 1]).magnitude;
+            const int resampled = 24;
+            int j = 1;
+            float walked = 0f;
+            for (int k = 0; k <= resampled; k++)
             {
-                bool first = k <= perSegment;
-                float u = first ? k / (float)perSegment : (k - perSegment) / (float)perSegment;
-                Vector2 point = first ? Hermite(p0, t0, p1, t1, u) : Hermite(p1, t1, p2, t2, u);
-                Vector2 tangent = first ? HermiteTangent(p0, t0, p1, t1, u) : HermiteTangent(p1, t1, p2, t2, u);
-                tangent = tangent.sqrMagnitude > 1e-8f ? tangent.normalized : new Vector2(dir, 0f);
-                float t = k / (float)total;
-                float wave = _render.NebariRootWaviness * th0 * Mathf.Sin(2f * Mathf.PI * t + phase) * Mathf.Sin(Mathf.PI * t);
-                point += new Vector2(-tangent.y, tangent.x) * wave;
-                float width = baseWidth * Mathf.Lerp(1f, _render.NebariRootTipRatio, t);
-                samples.Add(new Vector3(point.x, point.y, width));
+                float target = total * k / resampled;
+                while (j < _rootRaw.Count - 1 && walked + ((Vector2)_rootRaw[j] - (Vector2)_rootRaw[j - 1]).magnitude < target)
+                {
+                    walked += ((Vector2)_rootRaw[j] - (Vector2)_rootRaw[j - 1]).magnitude;
+                    j++;
+                }
+                float span = ((Vector2)_rootRaw[j] - (Vector2)_rootRaw[j - 1]).magnitude;
+                Vector2 point = Vector2.Lerp(_rootRaw[j - 1], _rootRaw[j], span > 1e-6f ? Mathf.Clamp01((target - walked) / span) : 0f);
+                float t = k / (float)resampled;
+                // Upward-only wave (the centre line never sinks below the moss line on the visible part).
+                float wave = _render.NebariRootWaviness * th0 * (0.5f + 0.5f * Mathf.Sin(2f * Mathf.PI * t + phase)) * Mathf.Sin(Mathf.PI * t)
+                    * (1f - Mathf.SmoothStep(1f - bury - 0.1f, 1f - bury, t));
+                point.y += wave;
+                samples.Add(new Vector3(point.x, point.y, baseWidth * Mathf.Lerp(1f, _render.NebariRootTipRatio, t)));
+            }
+        }
+
+        void AppendHermite(Vector2 a, Vector2 ta, Vector2 b, Vector2 tb, int steps, bool first)
+        {
+            for (int k = first ? 0 : 1; k <= steps; k++)
+            {
+                Vector2 p = Hermite(a, ta, b, tb, k / (float)steps);
+                _rootRaw.Add(new Vector3(p.x, p.y, 0f));
+            }
+        }
+
+        /// <summary>Arc parameter of #0 where its centre line reaches height <paramref name="y"/> (bisection; 0 below the base).</summary>
+        float TrunkParamAtHeight(float y)
+        {
+            float lo = 0f, hi = 1f;
+            if (Eval(0, 1f).y <= y) return 1f;
+            for (int k = 0; k < 20; k++)
+            {
+                float mid = 0.5f * (lo + hi);
+                if (Eval(0, mid).y < y) lo = mid;
+                else hi = mid;
+            }
+            return 0.5f * (lo + hi);
+        }
+
+        /// <summary>Records where root <paramref name="samples"/> crosses the moss line (for the SoilFront moss tuft).</summary>
+        void RecordRootTip(List<Vector3> samples)
+        {
+            float moss = _render.MossLineY;
+            for (int k = samples.Count - 1; k > 0; k--)
+            {
+                if (samples[k - 1].y < moss) continue;
+                Vector3 a = samples[k - 1], b = samples[k];
+                float f = Mathf.Abs(a.y - b.y) > 1e-5f ? Mathf.Clamp01((a.y - moss) / (a.y - b.y)) : 0f;
+                _rootTips.Add(new Vector3(Mathf.Lerp(a.x, b.x, f), moss, Mathf.Lerp(a.z, b.z, f)));
+                return;
             }
         }
 

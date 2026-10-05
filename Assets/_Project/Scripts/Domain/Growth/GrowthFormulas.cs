@@ -33,6 +33,27 @@ namespace PocketArbor.Domain.Growth
         public static double DepthScale(int depth, GrowthConfig config) =>
             DepthScale(depth, config.MaxDepth, config.DepthScaleExponent, config.DepthScaleMin);
 
+        /// <summary>depthScale of a fractional depth (⚑Q BALANCE §1.4.1(б): ord-0 nodes use Depth × TrunkChainDepthScaleFactor).</summary>
+        public static double DepthScale(double depth, int maxDepth, double exponent, double minScale)
+        {
+            double baseValue = maxDepth > 0 ? Clamp01(1.0 - depth / maxDepth) : 0.0;
+            double scaled = Math.Pow(baseValue, exponent);
+            if (double.IsNaN(scaled)) scaled = 0.0;
+            return scaled > minScale ? scaled : minScale;
+        }
+
+        /// <summary>
+        /// ⚑Q BALANCE §1.4.1(б): depthScale of a node by its axis — ord 0 (trunk chain, crown axis): depthScale(Depth·chainDepthFactor);
+        /// ord ≥ 1: depthScale(Depth) (TZ). With chainDepthFactor = 1 both coincide.
+        /// </summary>
+        public static double AxisDepthScale(int depth, bool ord0, double chainDepthFactor, GrowthConfig config) =>
+            ord0 ? DepthScale(depth * Clamp(chainDepthFactor, 0.0, 1.0), config.MaxDepth, config.DepthScaleExponent, config.DepthScaleMin)
+                : DepthScale(depth, config);
+
+        /// <summary>th_max of a node by its axis (§1.4.1(б)): MaxThickness · AxisDepthScale.</summary>
+        public static double MaxThicknessAt(int depth, bool ord0, double chainDepthFactor, GrowthConfig config) =>
+            config.MaxThickness * AxisDepthScale(depth, ord0, chainDepthFactor, config);
+
         /// <summary>th_max(d) = MaxThickness · depthScale(d).</summary>
         public static double MaxThicknessAt(int depth, GrowthConfig config) =>
             config.MaxThickness * DepthScale(depth, config);
@@ -112,6 +133,20 @@ namespace PocketArbor.Domain.Growth
             double ratio = apical ? config.ApicalThicknessRatio : config.LateralThicknessRatio;
             return ratio * ThicknessAt(parentThickness, attachT, config.SegmentTipTaper);
         }
+
+        /// <summary>
+        /// ⚑Q BALANCE §1.4.1(б) / §1.4.3: ceiling of a child of an ord-0 parent (trunk chain, crown axis):
+        /// apical — chainTaperRatio · th_parent (no th_at); lateral — primaryRatio · th_at(parent, AttachT).
+        /// </summary>
+        public static double AxisChildThicknessCap(double parentThickness, double attachT, bool apical, double chainTaperRatio, double primaryRatio,
+            GrowthConfig config) =>
+            apical ? chainTaperRatio * parentThickness : primaryRatio * ThicknessAt(parentThickness, attachT, config.SegmentTipTaper);
+
+        /// <summary>Ceiling of a child by the order of its parent: ord 0 → <see cref="AxisChildThicknessCap"/>, else §1.2.2.</summary>
+        public static double ThicknessCap(double parentThickness, double attachT, bool apical, bool parentOrd0, in ShapeParams shape, GrowthConfig config) =>
+            parentOrd0
+                ? AxisChildThicknessCap(parentThickness, attachT, apical, shape.TrunkChainTaperRatio, shape.PrimaryThicknessRatio, config)
+                : ThicknessCap(parentThickness, attachT, apical, config);
 
         /// <summary>sgn with sgn(0) = +1 (BALANCE §1.2.0).</summary>
         public static double SignNonZero(double value) => value < 0.0 ? -1.0 : 1.0;

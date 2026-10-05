@@ -190,12 +190,13 @@ namespace PocketArbor.Domain.Tests.Growth
                 Assert.AreEqual(expectedTrunk, tree.Nodes[0].Thickness, 1e-12, "trunk thickens ×3");
                 Assert.Greater(tree.Nodes[0].Thickness, before.Nodes[0].Thickness);
 
-                int other = 1;
-                double ds = GrowthFormulas.DepthScale(before.Nodes[other].Depth, config);
+                int other = 1; // chain k1 (ord 0): ⚑Q BALANCE §1.4.1(б) — depthScale(0.5·k), ceiling 0.75 × trunk
+                double ds = GrowthFormulas.AxisDepthScale(before.Nodes[other].Depth, true, config.TrunkChainDepthScaleFactor, config);
                 double expectedOther = GrowthFormulas.Thicken(before.Nodes[other].Thickness, config.MaxThickness * ds,
                     config.ThickeningRate, 1.0, ds, 1.0);
                 // ⚑ BALANCE §1.2.2: plus the taper ceiling from the (already updated) trunk.
-                double cap = GrowthFormulas.ThicknessCap(tree.Nodes[0].Thickness, before.Nodes[other].AttachT, true, config);
+                double cap = GrowthFormulas.AxisChildThicknessCap(tree.Nodes[0].Thickness, before.Nodes[other].AttachT, true,
+                    config.TrunkChainTaperRatio, config.PrimaryThicknessRatio, config);
                 expectedOther = Math.Min(expectedOther, Math.Max(before.Nodes[other].Thickness, cap));
                 Assert.AreEqual(expectedOther, tree.Nodes[other].Thickness, 1e-12, "non-trunk nodes are not boosted");
             }

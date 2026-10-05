@@ -68,8 +68,10 @@ namespace PocketArbor.Domain.Tree
                 Depth = depth,
                 Length = config.PhoenixBudLength,
                 TargetLength = config.ShootBaseLength * config.ApicalLengthMultiplier,
-                Thickness = Math.Min(config.PhoenixBudThickness, Math.Min(GrowthFormulas.MaxThicknessAt(depth, config),
-                    GrowthFormulas.ThicknessCap(tree.Nodes[0].Thickness, 1.0, true, config))),
+                // ⚑Q BALANCE §1.4.1(б): apical child of the ord-0 trunk (species profile not known here → config values).
+                Thickness = Math.Min(config.PhoenixBudThickness,
+                    Math.Min(GrowthFormulas.MaxThicknessAt(depth, true, config.TrunkChainDepthScaleFactor, config),
+                        GrowthFormulas.AxisChildThicknessCap(tree.Nodes[0].Thickness, 1.0, true, config.TrunkChainTaperRatio, config.PrimaryThicknessRatio, config))),
                 BaseAngle = angle,
                 CurrentAngle = angle,
                 Curvature = 0.0,

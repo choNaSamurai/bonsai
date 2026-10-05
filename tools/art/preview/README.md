@@ -5,7 +5,11 @@ from the generated sources in `Assets/_Project/Art/Source/` (L2 reference crops,
 
 | Script | Output |
 |---|---|
-| `build_pads.py` | `pads_{momiji,kuromatsu,yamazakura}.png/.json` |
+| `build_pads.py [momiji] [kuromatsu] [yamazakura]` | `pads_{momiji,kuromatsu,yamazakura}.png/.json` (no args = all; Kuromatsu is painted by `pine.py` since PA-102Q, `KURO_FROM_NIGHT=1` = old night cut-outs) |
+| `pine.py` | PA-102Q: procedural Kuromatsu needle-fan shelves (dome / L / M / S), heights grid-fitted to the opaque-ratio targets |
+| `build_moss_tuft.py` | PA-102Q: `moss_tuft.png/.json` (3 moss cushions for root tips) |
+| `soil_front.py` | PA-102Q: measures the SoilFront moss crest, patches `soil.json` (`front*` fields); also run at the end of `build_soil.py` |
+| `preview_nebari.py` | PA-102Q review: roots vs SoilFront band at preview scale (`$ART_SCRATCH/pa102q/nebari_moss_before_after.png`; `SOIL_WIDTH_RATIO=0.88` env to try the pot-scale strip) |
 | `build_bark.py` | `bark_trunk.png`, `bark_young.png` |
 | `build_pot.py` | `pot_tokoname.png/.json` |
 | `build_soil.py` | `soil_moist.png`, `soil_dry.png`, `soil.json` |

@@ -83,7 +83,8 @@ namespace PocketArbor.Domain.Growth
         // §1.2.1 Attachment point of lateral shoots (fraction of the parent length).
         public double LateralSlotT0 = 0.45;
         public double LateralSlotT1 = 0.85;
-        public double TrunkBaseSlotT0 = 0.70;
+        /// <summary>⚑Q BALANCE §1.4.1(в): 0.70 → 0.78 Proposed; PA-102Q tuning → 0.74 (range 0.74–0.82, TD-042).</summary>
+        public double TrunkBaseSlotT0 = 0.74;
         public double TrunkBaseSlotT1 = 0.95;
         public double AttachTJitter = 0.04;
         public double AttachTMin = 0.05;
@@ -106,7 +107,8 @@ namespace PocketArbor.Domain.Growth
 
         // §1.3.1 Trunk chain segment k ≥ 1: TargetLength = TrunkSegmentLength·TrunkSegmentDecay^(k−1)·(1 + TrunkSegmentJitter·(2·u5 − 1)).
         public double TrunkSegmentLength = 22.5;
-        public double TrunkSegmentDecay = 0.90;
+        /// <summary>⚑Q BALANCE §1.4.1(в): 0.90 → 0.78 Proposed; PA-102Q tuning → 0.84 (range 0.72–0.84, TD-042).</summary>
+        public double TrunkSegmentDecay = 0.84;
         public double TrunkSegmentJitter = 0.08;
 
         /// <summary>§1.3.1 Crown axis (ord 0, Depth ≥ TrunkChainSegments) length factor (replaces OrderLengthFactor; ×ApicalLengthMultiplier stays).</summary>
@@ -116,7 +118,7 @@ namespace PocketArbor.Domain.Growth
         public double TrunkSwayBendGain = 0.5;
 
         /// <summary>§1.3.1 Base lean of #0: BaseAngle(#0) = lean + TierPhase·TrunkBaseSwayRatio·A_1.</summary>
-        public double TrunkBaseSwayRatio = 0.35;
+        public double TrunkBaseSwayRatio = 0.20; // PA-102Q tuning (PA-102P range 0.2–0.5, Proposed 0.35): TD-042
 
         // §1.3.1 Apical delay of the trunk: an ord-0 node of index k = Depth takes an apical child only when AgeDays ≥ Base + Step·k.
         public int TrunkApicalDelayBaseDays = 4; // PA-102P tuning (range 4–8, Proposed 6): TD-031
@@ -146,6 +148,33 @@ namespace PocketArbor.Domain.Growth
         // §1.2.5 [MODEL-derived] A pad is "full" from this many nodes.
         public int PadFullNodes = 4;
 
+        // ---- Ideal, iteration 2 (BALANCE §1.4, PA-102Q) --------------------------------------------
+
+        /// <summary>§1.4.1(б): ceiling of an apical child of an ord-0 node (chain and crown axis) = ratio × Thickness(parent)
+        /// (replaces ApicalThicknessRatio·th_at(parent, 1) for these nodes).</summary>
+        public double TrunkChainTaperRatio = 0.75;
+
+        /// <summary>§1.4.1(б): natural ceiling of ord-0 nodes th_max = MaxThickness·depthScale(Depth × this); ord ≥ 1 — TZ.</summary>
+        public double TrunkChainDepthScaleFactor = 0.5;
+
+        /// <summary>§1.4.3: ceiling of a lateral child of an ord-0 node (primary, crown-axis lateral) = ratio × th_at(parent, AttachT).</summary>
+        public double PrimaryThicknessRatio = 0.38;
+
+        /// <summary>§1.4.3: × on the TargetLength of every ord-1 node of a primary axis (an axis starting at a trunk-chain node).</summary>
+        public double PrimaryLengthFactor = 0.85;
+
+        /// <summary>§1.4.4: × on the TargetLength of crown-axis laterals and their apical continuations (apex dome).</summary>
+        public double CrownLateralLengthFactor = 1.5; // PA-102Q tuning (range 1.0–1.5, Proposed 1.25): TD-042
+
+        /// <summary>§1.4.4: × on the selection weight of the dome subtree (crown-axis nodes and all descendants); Σw (rate) unchanged.</summary>
+        public double DomeWeightMultiplier = 3.0; // PA-102Q tuning (range 1.5–3.0, Proposed 2.0): TD-042
+
+        /// <summary>§1.4.4 lever (range 0.45–0.70): slot 0 of crown-axis laterals (other non-#0 parents keep LateralSlotT0).</summary>
+        public double CrownLateralSlotT0 = 0.45;
+
+        /// <summary>§1.4.7: |TrunkLeanOffsetDeg| λ of a ShapeStyleProfile is clamped to this (owner 2026-10-05: Shakan ≤ 30°).</summary>
+        public double TrunkLeanOffsetMaxDeg = 30.0;
+
         // §1.2.8 Sapling wild twig.
         public double SaplingTwigAttachT = 0.30;
         public double SaplingTwigWorldAngleDeg = 30.0;
@@ -167,6 +196,12 @@ namespace PocketArbor.Domain.Growth
             if (!(SegmentTipTaper >= 0.0) || !(SegmentTipTaper <= 1.0)) throw new ArgumentException("SegmentTipTaper must be in [0, 1]");
             if (TrunkApicalDelayBaseDays < 0 || TrunkApicalDelayStepDays < 0) throw new ArgumentException("Trunk apical delay must be >= 0");
             if (BackBudDays < 0 || BackBudRadiusEdges < 0 || !(BackBudWeightMultiplier >= 0.0)) throw new ArgumentException("Back-budding parameters must be >= 0");
+            if (!(TrunkChainTaperRatio > 0.0) || !(TrunkChainDepthScaleFactor >= 0.0) || !(PrimaryThicknessRatio > 0.0))
+                throw new ArgumentException("Trunk-chain taper parameters must be positive");
+            if (!(PrimaryLengthFactor > 0.0) || !(CrownLateralLengthFactor > 0.0) || !(DomeWeightMultiplier >= 0.0))
+                throw new ArgumentException("Primary / dome factors must be positive");
+            if (!(CrownLateralSlotT0 >= 0.0) || !(CrownLateralSlotT0 <= 1.0)) throw new ArgumentException("CrownLateralSlotT0 must be in [0, 1]");
+            if (!(TrunkLeanOffsetMaxDeg >= 0.0) || !(TrunkLeanOffsetMaxDeg <= MaxShootWorldAngleDeg)) throw new ArgumentException("TrunkLeanOffsetMaxDeg must be in [0, MaxShootWorldAngleDeg]");
             if (!(ApicalDominanceWeight >= 0.0) || !(TierWeight >= 0.0) || !(PadWeight >= 0.0) || !(InteriorWeight >= 0.0))
                 throw new ArgumentException("Role weights must be >= 0");
         }

@@ -71,3 +71,7 @@ json.dump({"groundFromTop": GROUND_FROM_TOP, "fitsPot": "pot_tokoname", "width":
            "note": "Both soil_moist.png and soil_dry.png share this exact layout; groundFromTop = px from the top edge to the ground line (top of the opaque band). Strip sits BEHIND pot_tokoname.png, ground line aligned to pot innerTopY, strip centred on the pot opening (innerLeft..innerRight + 12px each side). Side edges are trapezoid-masked to the opening of pot_tokoname; another pot needs its own mask."},
           open(OUT + 'soil.json', 'w'), indent=2)
 print(moist.size, GROUND_FROM_TOP)
+
+# PA-102Q: SoilFront band numbers (moss crest / recommended depth) -> soil.json
+import soil_front
+print(soil_front.measure())

@@ -50,9 +50,9 @@ namespace PocketArbor.DevTools.GrowthPreview
         readonly int[] _quadIdx = { 0, 1, 2, 0, 2, 3 };
         readonly List<Vector3> _bandPos = new List<Vector3>(8);
         readonly List<Vector2> _bandUv = new List<Vector2>(8);
-        readonly List<Vector2> _bandUv1 = new List<Vector2> { Vector2.zero, Vector2.zero, Vector2.zero, Vector2.zero, Vector2.zero, Vector2.zero, Vector2.zero, Vector2.zero };
-        readonly List<Color32> _bandColors = new List<Color32>(8);
-        readonly int[] _bandIdx = { 0, 1, 3, 0, 3, 2, 2, 3, 5, 2, 5, 4, 4, 5, 7, 4, 7, 6 };
+        readonly List<Vector2> _bandUv1 = new List<Vector2>(96);
+        readonly List<Color32> _bandColors = new List<Color32>(96);
+        readonly List<int> _bandIdxList = new List<int>(288);
 
         bool _visible = true;
         bool _overlayOn;
@@ -111,6 +111,19 @@ namespace PocketArbor.DevTools.GrowthPreview
             _bark.Go.SetActive(!treeOnly || showBark);
             _pads.Go.SetActive(!treeOnly || showPads);
             if (treeOnly) _overlay.Renderer.enabled = false;
+            else SetOverlay(_overlayOn, _overlayAlpha);
+        }
+
+        /// <summary>Harness: only the SoilFront moss layer (root visibility, BALANCE §1.4.0).</summary>
+        public void SetSoilFrontOnly(bool on)
+        {
+            _background.Go.SetActive(!on);
+            _soil.Go.SetActive(!on);
+            _pot.Go.SetActive(!on);
+            _bark.Go.SetActive(!on);
+            _pads.Go.SetActive(!on);
+            _soilFront.Go.SetActive(true);
+            if (on) _overlay.Renderer.enabled = false;
             else SetOverlay(_overlayOn, _overlayAlpha);
         }
 
@@ -211,16 +224,33 @@ namespace PocketArbor.DevTools.GrowthPreview
 
             // Soil front (ADR-0004 §3 SoilFront): the top band of the same strip over the trunk base and roots, ground line
             // slightly below y = 0, as wide as the opening at the trunk base, edges faded into the soil behind.
+            // ⚑Q BALANCE §1.4.2: the moss above the ground line is fitted into SoilFrontMossHeightUnits (≤ 2.5 units) — the texture's
+            // moss rows are squashed, not cut; roots lie on the moss line (ADR-0004 rev.4) and dive under it only with their last 25%,
+            // where a moss tuft (same texture) covers the entry point.
+            TreeRenderConfig render = builder.Render;
             float bandWidth = pot.OpeningWidth(Style.TreeBaseInOpening) * upp * Style.SoilFrontWidthRatio;
-            float bandGround = Style.SoilFrontGroundY;
-            float bandTopV = 1f;
+            float bandGround = render.SoilFrontGroundY;
+            float groundV = 1f - Mathf.Clamp01(soil.GroundFromTop / Mathf.Max(1f, soil.Height));
             float bandBottomV = 1f - Mathf.Clamp01((soil.GroundFromTop + Style.SoilFrontBandPx(soil.Height)) / Mathf.Max(1f, soil.Height));
-            float bandTop = bandGround + soil.GroundFromTop * soilUpp;
-            float bandBottom = bandTop - (bandTopV - bandBottomV) * soil.Height * soilUpp;
+            float mossHeight = render.SoilFrontMossHeightUnits; // = the moss line of the root geometry (TreeRenderConfig.MossLineY)
+            float bandBottom = bandGround - (groundV - bandBottomV) * soil.Height * soilUpp;
             float uSpan = Mathf.Clamp01(bandWidth / (soil.Width * soilUpp));
             _soilFront.Material.SetTexture(MainTexId, soil.Texture);
-            SetBand(_soilFront.Mesh, -0.5f * bandWidth, 0.5f * bandWidth, bandBottom, bandTop, 0.5f - 0.5f * uSpan, 0.5f + 0.5f * uSpan,
-                bandBottomV, bandTopV, Style.SoilFrontEdgeFade);
+            ClearBands();
+            AddBand(-0.5f * bandWidth, 0.5f * bandWidth, bandBottom, bandGround, bandGround + mossHeight, 0.5f - 0.5f * uSpan, 0.5f + 0.5f * uSpan,
+                bandBottomV, groundV, 1f, Style.SoilFrontEdgeFade, true);
+            MossTopY = bandGround + mossHeight;
+            IReadOnlyList<Vector3> tips = builder.LastRootTips;
+            for (int k = 0; k < tips.Count; k++)
+            {
+                Vector3 tip = tips[k];
+                float w = Mathf.Max(1.5f, render.NebariTipTuftWidthRatio * tip.z);
+                float u0 = Mathf.Clamp01(0.5f + tip.x / (soil.Width * soilUpp)) - 0.5f * w / (soil.Width * soilUpp);
+                float uw = w / (soil.Width * soilUpp);
+                AddBand(tip.x - 0.5f * w, tip.x + 0.5f * w, tip.y - 0.8f * tip.z, tip.y - 0.1f, tip.y + render.NebariTipTuftHeight,
+                    u0, u0 + uw, Mathf.Lerp(groundV, bandBottomV, 0.3f), groundV, 1f, 0.3f, false);
+            }
+            FlushBands(_soilFront.Mesh);
 
             // Washi background: one big quad, UV in world units / tile (texture wrap Repeat).
             float tile = Mathf.Max(1f, Style.WashiTileWorld);
@@ -248,12 +278,26 @@ namespace PocketArbor.DevTools.GrowthPreview
             return bounds;
         }
 
-        /// <summary>3-column band: alpha 0 on the outer columns and along the bottom edge (soft edges), 1 on top inside.</summary>
-        void SetBand(Mesh mesh, float x0, float x1, float y0, float y1, float u0, float u1, float v0, float v1, float edgeFade)
+        /// <summary>World y of the top of the SoilFront moss band after the last rebuild (moss line, harness).</summary>
+        public float MossTopY { get; private set; }
+
+        void ClearBands()
         {
             _bandPos.Clear();
             _bandUv.Clear();
+            _bandUv1.Clear();
             _bandColors.Clear();
+            _bandIdxList.Clear();
+        }
+
+        /// <summary>
+        /// 4 columns × 3 rows (bottom y0 / ground y1 / top y2 with texture v0 / v1 / v2): alpha 0 on the outer columns and along the bottom
+        /// edge (soft edges), 1 inside on the ground and top rows (the top row keeps the texture's own moss alpha).
+        /// <paramref name="opaqueBottom"/> = false fades the ground row too (a tuft blends into the band below it).
+        /// </summary>
+        void AddBand(float x0, float x1, float y0, float y1, float y2, float u0, float u1, float v0, float v1, float v2, float edgeFade, bool opaqueBottom)
+        {
+            int start = _bandPos.Count;
             float fade = Mathf.Clamp(edgeFade, 0f, 0.45f) * (x1 - x0);
             float fu = Mathf.Clamp(edgeFade, 0f, 0.45f) * (u1 - u0);
             float[] xs = { x0, x0 + fade, x1 - fade, x1 };
@@ -261,15 +305,31 @@ namespace PocketArbor.DevTools.GrowthPreview
             for (int c = 0; c < 4; c++)
             {
                 byte inner = (byte)(c == 0 || c == 3 ? 0 : 255);
+                byte ground = opaqueBottom ? inner : (byte)(inner / 2);
                 _bandPos.Add(new Vector3(xs[c], y0, 0f)); _bandUv.Add(new Vector2(us[c], v0)); _bandColors.Add(new Color32(255, 255, 255, 0));
-                _bandPos.Add(new Vector3(xs[c], y1, 0f)); _bandUv.Add(new Vector2(us[c], v1)); _bandColors.Add(new Color32(255, 255, 255, inner));
+                _bandPos.Add(new Vector3(xs[c], y1, 0f)); _bandUv.Add(new Vector2(us[c], v1)); _bandColors.Add(new Color32(255, 255, 255, ground));
+                _bandPos.Add(new Vector3(xs[c], y2, 0f)); _bandUv.Add(new Vector2(us[c], v2)); _bandColors.Add(new Color32(255, 255, 255, inner));
+                for (int k = 0; k < 3; k++) _bandUv1.Add(Vector2.zero); // brightness offset 0 (missing streams are undefined on Metal)
             }
+            for (int c = 0; c < 3; c++)
+            {
+                for (int row = 0; row < 2; row++)
+                {
+                    int a = start + c * 3 + row, b = a + 3;
+                    _bandIdxList.Add(a); _bandIdxList.Add(a + 1); _bandIdxList.Add(b + 1);
+                    _bandIdxList.Add(a); _bandIdxList.Add(b + 1); _bandIdxList.Add(b);
+                }
+            }
+        }
+
+        void FlushBands(Mesh mesh)
+        {
             mesh.Clear();
             mesh.SetVertices(_bandPos);
             mesh.SetUVs(0, _bandUv);
             mesh.SetUVs(1, _bandUv1);
             mesh.SetColors(_bandColors);
-            mesh.SetTriangles(_bandIdx, 0, true);
+            mesh.SetTriangles(_bandIdxList, 0, true);
         }
 
         void SetQuad(Mesh mesh, Rect rect, Rect uv)
