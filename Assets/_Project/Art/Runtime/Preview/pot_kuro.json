@@ -1,0 +1,17 @@
+{
+  "lipY": 381,
+  "innerLeft": 69,
+  "innerRight": 1207,
+  "innerTopY": 381,
+  "innerTopLeft": 69,
+  "innerTopRight": 1207,
+  "rimBackTopY": 381,
+  "rimOuterLeft": 26,
+  "rimOuterRight": 1250,
+  "wallPx": 43,
+  "soilMaxBelowLipPx": 121,
+  "width": 1275,
+  "height": 397,
+  "hasOpening": false,
+  "note": "PA-102T batch 02 skin: front wall only, NO opening (generation is a side view at rim height). y from the bottom edge, x from the left. Ground line / trunk base = lipY (PotArt.BaseY when innerTopY <= lipY). Soil strip goes BEHIND the pot, scaled to innerRight-innerLeft, its ground line (soil.json groundFromTop) at lipY, clipped to at most soilMaxBelowLipPx below lipY (the body tapers under the rim: deeper soil would show beside the walls). Only the moss crest above the rim stays visible."
+}

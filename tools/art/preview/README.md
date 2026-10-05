@@ -5,7 +5,12 @@ from the generated sources in `Assets/_Project/Art/Source/` (L2 reference crops,
 
 | Script | Output |
 |---|---|
-| `build_pads.py [momiji] [kuromatsu] [yamazakura]` | `pads_{momiji,kuromatsu,yamazakura}.png/.json` (no args = all; Kuromatsu is painted by `pine.py` since PA-102Q, `KURO_FROM_NIGHT=1` = old night cut-outs) |
+| `build_pads_d5.py [momiji] [kuromatsu] [yamazakura] [momiji_autumn] [yamazakura_bloom]` | **PA-102T, поточний**: `pads_*.png/.json` з D5-аркушів (`key.py` ключ magenta, компоненти, `EXCLUDE` злиплих, класи за рядом, купол `role:dome`) |
+| `key.py` | PA-102T: ключ magenta для RGB-генерацій (розв'язана альфа + despill інтер'єрним кольором), QA `pink_fringe_share` |
+| `build_bark_species.py [kuromatsu] [momiji] [yamazakura]` | PA-102T: `bark_<species>_{trunk,young}.png` 512² (вирівнювання світла, шви, тон; друкує шви/Lab/вагу) |
+| `build_pots_c2.py [kuro] [celadon] [tokoname_v2]` | PA-102T: горщики-скіни без отвору `pot_*.png/.json` |
+| `collage_batch02.py [pads] [bark] [pots]` | PA-102T: ревʼю-аркуші в `$ART_SCRATCH/batch02/` |
+| `build_pads.py [momiji] [kuromatsu] [yamazakura]` | **легасі PA-103S/102Q — перезапише D5-атласи!** | `pads_{momiji,kuromatsu,yamazakura}.png/.json` (no args = all; Kuromatsu is painted by `pine.py` since PA-102Q, `KURO_FROM_NIGHT=1` = old night cut-outs) |
 | `pine.py` | PA-102Q: procedural Kuromatsu needle-fan shelves (dome / L / M / S), heights grid-fitted to the opaque-ratio targets |
 | `build_moss_tuft.py` | PA-102Q: `moss_tuft.png/.json` (3 moss cushions for root tips) |
 | `soil_front.py` | PA-102Q: measures the SoilFront moss crest, patches `soil.json` (`front*` fields); also run at the end of `build_soil.py` |
@@ -20,3 +25,6 @@ from the generated sources in `Assets/_Project/Art/Source/` (L2 reference crops,
 Run from this folder: `python3 build_pads.py` etc. Re-run when D5 / B2 v2 / B3 v2 / C v2 arrive from
 Antigravity (see `docs/design/IMAGE_PROMPTS.md`) — crop coordinates inside the scripts are tuned to the
 current 768×1376 references and must be revisited for new sources.
+
+PA-102T: D5 / B2-per-species / C2 sources processed by `build_pads_d5.py`, `build_bark_species.py`, `build_pots_c2.py`
+(`collage_batch02.py` for review). Do not run the legacy `build_pads.py` unless you want the PA-103S/102Q atlases back.
