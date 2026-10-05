@@ -77,3 +77,6 @@ Thumbs.db
 
 # ---------- Claude Code (local only) ----------
 .claude/settings.local.json
+
+# Agent test copies / build artifacts (persist across Claude Code sessions; Unity ignores dot-folders)
+/.agent-workspace/

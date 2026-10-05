@@ -40,6 +40,13 @@ namespace PocketArbor.DevTools.GrowthPreview
         static readonly int TwistShearId = Shader.PropertyToID("_BarkTwistShear");
         static readonly int CollarOverlapId = Shader.PropertyToID("_CollarOverlapPx");
         static readonly int MainTexId = Shader.PropertyToID("_MainTex");
+        static readonly int TileScaleId = Shader.PropertyToID("_BarkTileScale");
+        static readonly int AspectId = Shader.PropertyToID("_BarkAspect");
+        static readonly int ContrastId = Shader.PropertyToID("_BarkContrast");
+        static readonly int SheenId = Shader.PropertyToID("_BarkSheen");
+        static readonly int NeutralizeId = Shader.PropertyToID("_BarkNeutralize");
+        static readonly int YoungTipTintId = Shader.PropertyToID("_YoungTipTint");
+        static readonly int YoungTipWidthId = Shader.PropertyToID("_YoungTipWidth");
         static readonly int ColorId = Shader.PropertyToID("_Color");
 
         readonly List<UnityEngine.Object> _owned = new List<UnityEngine.Object>();
@@ -195,14 +202,13 @@ namespace PocketArbor.DevTools.GrowthPreview
         {
             if (!art.Loaded) art.Load();
             SpeciesId species = tree.Genome.Species;
-            _bark.Material.SetTexture(BarkTrunkId, BarkOverride != null ? BarkOverride : art.BarkTrunk);
-            _bark.Material.SetTexture(BarkYoungId, BarkOverride != null ? BarkOverride : art.BarkYoung);
+            ApplySpeciesBark(species, art, builder.Render);
             PadAtlas atlas = art.Atlas(species);
             _pads.Material.SetTexture(MainTexId, atlas.Texture);
 
             Bounds bounds = builder.BuildTextured(tree, _bark.Mesh, _pads.Mesh, model.Config, model.SpeciesConfig, Style, atlas);
             // ⚑R BALANCE §1.5.4(в) / AC21: render knobs of the bark material (no mesh rebuild needed when tuned).
-            _bark.Material.SetFloat(TwistShearId, builder.Render.BarkTwistShear);
+            _bark.Material.SetFloat(TwistShearId, BarkProfile != null ? BarkProfile.BarkTwistShear : builder.Render.BarkTwistShear);
             _bark.Material.SetFloat(CollarOverlapId, builder.Render.CollarOverlapPx);
 
             // Pot: ⚑P BALANCE §1.3.0 — the outer front rim is P = TreeRenderConfig.PotWidthUnits (fixed 92 units, like the 566 px
@@ -221,8 +227,10 @@ namespace PocketArbor.DevTools.GrowthPreview
 
             // Soil strip behind the pot: ground line on the back inner edge (no opening → just above the Pot Lip).
             SoilArt soil = model.Moisture >= Style.MoistSoilThreshold ? art.SoilMoist : art.SoilDry;
-            float soilUpp = Mathf.Max(upp, builder.LastPotWidth * Style.SoilWidthRatio / Mathf.Max(1f, soil.Width));
-            float ground = pot.HasOpening ? (pot.InnerTopY - baseY) * upp : Style.SoilSurfaceY;
+            // TD-073: a pot skin without an opening — the soil strip behind the pot spans its inner width (innerLeft…innerRight), ground line on lipY.
+            float soilUpp = pot.HasOpening ? Mathf.Max(upp, builder.LastPotWidth * Style.SoilWidthRatio / Mathf.Max(1f, soil.Width))
+                : (pot.InnerRight - pot.InnerLeft) * upp / Mathf.Max(1f, soil.Width);
+            float ground = pot.HasOpening ? (pot.InnerTopY - baseY) * upp : (pot.LipY - baseY) * upp;
             float soilTop = ground + soil.GroundFromTop * soilUpp;
             _soil.Material.SetTexture(MainTexId, soil.Texture);
             SetQuad(_soil.Mesh, new Rect(-0.5f * soil.Width * soilUpp, soilTop - soil.Height * soilUpp, soil.Width * soilUpp, soil.Height * soilUpp),
@@ -282,6 +290,45 @@ namespace PocketArbor.DevTools.GrowthPreview
             bounds.Encapsulate(new Vector3(potRect.xMin, potRect.yMin, 0f));
             bounds.Encapsulate(new Vector3(potRect.xMax, potRect.yMax, 0f));
             return bounds;
+        }
+
+        /// <summary>⚑T BALANCE §1.6.6: species bark profile of the last rebuild (material only).</summary>
+        public SpeciesRenderProfile BarkProfile { get; private set; }
+
+        /// <summary>True when the last rebuild used the species' own textures (false = placeholder tone over the shared bark).</summary>
+        public bool BarkIsSpeciesTexture { get; private set; }
+
+        /// <summary>Harness / T18: when set, the bark profile of this species is used instead of the tree's (same mesh, other material).</summary>
+        public SpeciesId? BarkSpeciesOverride { get; set; }
+
+        static float SafeRatio(float a, float b) => b > 1e-3f ? a / b : 1f;
+
+        void ApplySpeciesBark(SpeciesId treeSpecies, PreviewArtLibrary art, TreeRenderConfig render)
+        {
+            SpeciesId species = BarkSpeciesOverride ?? treeSpecies;
+            SpeciesRenderProfile profile = SpeciesRenderProfile.Resolve(species);
+            BarkProfile = profile;
+            Texture2D trunk = art.SpeciesBarkTrunk(species), young = art.SpeciesBarkYoung(species);
+            bool own = trunk != null && young != null && BarkOverride == null;
+            BarkIsSpeciesTexture = own;
+            Material m = _bark.Material;
+            m.SetTexture(BarkTrunkId, BarkOverride != null ? BarkOverride : own ? trunk : art.BarkTrunk);
+            m.SetTexture(BarkYoungId, BarkOverride != null ? BarkOverride : own ? young : art.BarkYoung);
+            bool neutral = !own && BarkOverride == null;
+            m.SetColor(TrunkTintId, neutral ? profile.BarkTint : Style.TrunkTint);
+            m.SetColor(YoungTintId, neutral ? profile.BarkYoungTint : Style.YoungTint);
+            // The tip gradient also applies over a species texture: there the tip tint is relative (tip / young placeholder tone, Momiji → red tips).
+            Color rel = new Color(SafeRatio(profile.BarkYoungTipTint.r, profile.BarkYoungTint.r), SafeRatio(profile.BarkYoungTipTint.g, profile.BarkYoungTint.g),
+                SafeRatio(profile.BarkYoungTipTint.b, profile.BarkYoungTint.b), 1f);
+            m.SetColor(YoungTipTintId, neutral ? profile.BarkYoungTipTint : BarkOverride != null ? Style.YoungTint : rel * Style.YoungTint);
+            m.SetFloat(NeutralizeId, neutral ? 1f : 0f);
+            m.SetFloat(ContrastId, BarkOverride != null ? 1f : profile.BarkContrast);
+            m.SetFloat(SheenId, BarkOverride != null ? 0f : profile.BarkSheen);
+            m.SetVector(YoungTipWidthId, new Vector4(profile.YoungTipWidth.x, profile.YoungTipWidth.y, 0f, 0f));
+            // TD-068: tile density of the species texture = BarkTileV / BarkTileVRef (ref = 100 / BarkTileWorld); the placeholder keeps the isotropic tiling.
+            float reference = 100f / Mathf.Max(1e-3f, Style.BarkTileWorld);
+            m.SetFloat(TileScaleId, own ? profile.BarkTileV / reference : 1f);
+            m.SetFloat(AspectId, own && trunk.width > 0 ? trunk.height / (float)trunk.width : 1f);
         }
 
         /// <summary>AC21 harness: a flat texture for both barks (luminance = shading only) while set; null = the art.</summary>

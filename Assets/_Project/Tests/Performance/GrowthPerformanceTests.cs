@@ -84,5 +84,39 @@ namespace PocketArbor.Performance.Tests
                 .GC()
                 .Run();
         }
+
+        /// <summary>⚑T PA-102T T6: DailyStep with the tier balance — 0 B GC (spawning tree and 200 nodes) and DailyStep@200 median ≤ 30 µs.</summary>
+        [Test]
+        public void DailyStep_TierBalance_ZeroGcAndUnder30Microseconds()
+        {
+            var sim = CreateSimulator();
+            var spawning = GrowTree(sim, 60);
+            for (int k = 0; k < 5; k++) sim.DailyStep(TreeGraph.FromSnapshot(spawning.ToSnapshot())); // warm-up (JIT)
+            var probe = TreeGraph.FromSnapshot(spawning.ToSnapshot());
+            long before = System.GC.GetAllocatedBytesForCurrentThread();
+            for (int k = 0; k < 20; k++) sim.DailyStep(probe);
+            long spawningBytes = System.GC.GetAllocatedBytesForCurrentThread() - before;
+            Assert.AreEqual(0L, spawningBytes, "DailyStep while spawning (tier balance every shoot) allocates");
+
+            var full = GrowTree(sim, 150);
+            Assert.AreEqual(200, full.Count);
+            for (int k = 0; k < 20; k++) sim.DailyStep(full);
+            before = System.GC.GetAllocatedBytesForCurrentThread();
+            var times = new double[200];
+            var watch = new System.Diagnostics.Stopwatch();
+            for (int k = 0; k < times.Length; k++)
+            {
+                watch.Restart();
+                sim.DailyStep(full);
+                watch.Stop();
+                times[k] = watch.Elapsed.TotalMilliseconds * 1000.0;
+            }
+            long fullBytes = System.GC.GetAllocatedBytesForCurrentThread() - before;
+            System.Array.Sort(times);
+            double median = times[times.Length / 2];
+            TestContext.Out.WriteLine("DailyStep@200 median " + median.ToString("0.0") + " µs; spawning D60 20 steps: " + spawningBytes + " B");
+            Assert.AreEqual(0L, fullBytes, "DailyStep@200 allocates");
+            Assert.LessOrEqual(median, 30.0, "DailyStep@200 ≤ 30 µs (BALANCE §1.6.7)");
+        }
     }
 }

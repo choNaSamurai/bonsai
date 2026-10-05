@@ -113,7 +113,7 @@ namespace PocketArbor.Domain.Growth
         public double TrunkSegmentJitter = 0.08;
 
         /// <summary>§1.3.1 Crown axis (ord 0, Depth ≥ TrunkChainSegments) length factor (replaces OrderLengthFactor; ×ApicalLengthMultiplier stays).</summary>
-        public double CrownAxisLengthFactor = 0.70; // ⚑R BALANCE §1.5.6 Proposed 0.60; PA-102R tuning → 0.70 (range 0.50–0.70; k4 pad vs dome): TD-047
+        public double CrownAxisLengthFactor = 0.70; // ⚑T BALANCE §1.6.2(г) Proposed 0.60; PA-102T tuning → 0.70 (range 0.50–0.70; dome above #6): TD-075
 
         /// <summary>§1.3.1 S-curve amplitude gain of |bendBias| (⚑R §1.5.4(а): A_k = TrunkSwayDeg·(1 + gain·|bb|)·Profile[k]·(1 + Irregularity·h_k)).</summary>
         public double TrunkSwayBendGain = 0.5;
@@ -197,6 +197,37 @@ namespace PocketArbor.Domain.Growth
         /// Range 1.0–2.5.</summary>
         public double DomeLateralWeight = 1.5;
 
+        // ---- Ideal, iteration 4 (BALANCE §1.6, PA-102T) --------------------------------------------
+
+        /// <summary>⚑T §1.6.1(б): a hungry tier group (N_g &lt; T_g) gets at least TierHungryShare·d_g of the whole selection mass
+        /// (d_g = min(1, TierDeficitGain·(T_g − N_g)/T_g)). 0 = off. Range 0.20–0.40.</summary>
+        public double TierHungryShare = 0.30;
+
+        /// <summary>⚑T §1.6.1(б): full support while N_g &lt; T_g / gain. Range 1.5–3.0.</summary>
+        public double TierDeficitGain = 2.0;
+
+        /// <summary>⚑T §1.6.1(б): × on a fed group (T_g ≤ N_g &lt; TierCapRatio·T_g). 1 = off. Range 0.20–0.50.</summary>
+        public double TierFedFactor = 0.30;
+
+        /// <summary>⚑T §1.6.1(б): a group with N_g ≥ TierCapRatio·T_g is over its ceiling. Range 1.20–1.50.</summary>
+        public double TierCapRatio = 1.30;
+
+        /// <summary>⚑T §1.6.1(б): × on a group over its ceiling (not 0: Wild still reaches MaxNodes). 1 = off. Range 0–0.15.</summary>
+        public double TierCapFactor = 0.05;
+
+        /// <summary>⚑T §1.6.1(в) «pinch»: an ord ≥ 1 node without an apical child and with a fresh cut (GrowthDayIndex − LastCutDay &lt; BackBudDays)
+        /// takes only a lateral shoot (RoleWeight 0 while no lateral slot is free). false = PA-102R.</summary>
+        public bool PinchLateralOnly = true;
+
+        /// <summary>⚑T §1.6.2(а) «laterals first»: a crown-axis node takes an apical child only once it has this many live laterals (and its apical
+        /// delay has passed). 0 = PA-102R. Range 1–2.</summary>
+        public int CrownApicalNeedsLaterals = 2;
+
+        /// <summary>⚑T §1.6.2(б) crown shoulder (#7): slot 0 of the chain top is a dome lateral at this AttachT (± AttachTJitter), world angle
+        /// CrownLateralAngle*, side −s_k, length × CrownLateralLengthFactor, in the dome subtree. ≤ 0 = off (PA-102R: an intermediate tier).
+        /// Range 0.90–0.98.</summary>
+        public double CrownShoulderSlotT = 0.95;
+
         // §1.2.8 Sapling wild twig.
         public double SaplingTwigAttachT = 0.30;
         public double SaplingTwigWorldAngleDeg = 30.0;
@@ -228,6 +259,11 @@ namespace PocketArbor.Domain.Growth
             if (!(PrimaryReachCompensation >= 0.0) || !(PrimaryReachSinMin > 0.0) || !(PrimaryReachMinRatio > 0.0) || !(PrimaryReachMaxRatio >= PrimaryReachMinRatio))
                 throw new ArgumentException("Primary reach compensation parameters are invalid");
             if (double.IsNaN(TrunkBowCurvature) || double.IsInfinity(TrunkBowCurvature)) throw new ArgumentException("TrunkBowCurvature must be finite");
+            if (!(TierHungryShare >= 0.0) || !(TierHungryShare <= 1.0) || !(TierDeficitGain >= 0.0) || !(TierFedFactor >= 0.0) || !(TierCapRatio >= 1.0)
+                || !(TierCapFactor >= 0.0))
+                throw new ArgumentException("Tier balance parameters are invalid");
+            if (CrownApicalNeedsLaterals < 0) throw new ArgumentException("CrownApicalNeedsLaterals must be >= 0");
+            if (double.IsNaN(CrownShoulderSlotT) || CrownShoulderSlotT > 1.0) throw new ArgumentException("CrownShoulderSlotT must be <= 1 (<= 0 = off)");
             if (!(ApicalDominanceWeight >= 0.0) || !(TierWeight >= 0.0) || !(PadWeight >= 0.0) || !(InteriorWeight >= 0.0))
                 throw new ArgumentException("Role weights must be >= 0");
         }

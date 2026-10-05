@@ -12,11 +12,11 @@
 |---|---|---|
 | [0001](0001-unity-version-and-pipeline.md) | Unity 6.6 (6000.6.4f1) + URP 2D Renderer | Proposed |
 | [0002](0002-layered-assemblies.md) | Шари через asmdef, VContainer, R3, UniTask | Proposed |
-| [0003](0003-tree-data-model.md) | Плоска таблиця вузлів замість рекурсивного immutable-дерева (ред. 3, 2026-10-05: `LastCutDay`, `InPad`/`BackBudDist`, `rulesVersion`; доповнення PA-102R: `StableHash`, `GrowthRules.Version` 4) | Proposed |
-| [0004](0004-procedural-tree-rendering.md) | Процедурний меш гілок уздовж C1-осей + листя подушками з кластерів спрайтів (ред. 3, 2026-10-05: корені Небарі, подушки, горщик-масштаб; ред. 4, 2026-10-05: гаусове розширення основи, корені над мохом, кущики моху; ред. 5, 2026-10-05: корені — продовження стовбура, маска стику, скручування кори, пласкі/мінімальні подушки, `y_rim`, кадр за bounds усього дерева) | Proposed |
+| [0003](0003-tree-data-model.md) | Плоска таблиця вузлів замість рекурсивного immutable-дерева (ред. 3, 2026-10-05: `LastCutDay`, `InPad`/`BackBudDist`, `rulesVersion`; доповнення PA-102R: `StableHash`, `GrowthRules.Version` 4; ред. 4, 2026-10-05: `TierGroup`/`N_g`, баланс ваг за ярусом, предикат «лише бічний», слот бічної ланцюга за стороною, `GrowthRules.Version` 5) | Proposed |
+| [0004](0004-procedural-tree-rendering.md) | Процедурний меш гілок уздовж C1-осей + листя подушками з кластерів спрайтів (ред. 3, 2026-10-05: корені Небарі, подушки, горщик-масштаб; ред. 4, 2026-10-05: гаусове розширення основи, корені над мохом, кущики моху; ред. 5, 2026-10-05: корені — продовження стовбура, маска стику, скручування кори, пласкі/мінімальні подушки, `y_rim`, кадр за bounds усього дерева; ред. 6, 2026-10-05: корені до 10 з розгалуженням, кора за породою без зміни мешу, стеля пропорції подушки, Wild без «стосів») | Proposed |
 | [0005](0005-input-gesture-router.md) | Input System + глобальний GestureRouter | Proposed |
 | [0006](0006-ui-ugui-canvas.md) | uGUI Canvas + TextMeshPro + PrimeTween | Proposed |
 | [0007](0007-native-platform-layer.md) | Native-плагіни: хаптика, аудіосесія, віджети, геолокація | Proposed |
 | [0008](0008-persistence.md) | AtomicFileStore з SHA-256 envelope; схема сейву v1 (rev.3 — JsonUtility, double як long-біти; + доповнення 2a: `lastCutDay`, `rulesVersion`) | Proposed |
 | [0009](0009-billing-unity-iap.md) | Білінг: Unity IAP 5 для MVP; власний плагін StoreKit 2 + Play Billing — опція v1.1 | Proposed |
-| [0010](0010-shape-style-profile.md) | `ShapeStyleProfile`: стиль як накладка на параметри форми породи (`ShapeParams`); стиль не зберігається в сейві (MVP) (ред. 2, 2026-10-05: розміщення полів BALANCE §1.5) | Proposed |
+| [0010](0010-shape-style-profile.md) | `ShapeStyleProfile`: стиль як накладка на параметри форми породи (`ShapeParams`); стиль не зберігається в сейві (MVP) (ред. 2, 2026-10-05: розміщення полів BALANCE §1.5; ред. 3, 2026-10-05: `SpeciesRenderProfile`, Asset Diet кори, поля BALANCE §1.6) | Proposed |

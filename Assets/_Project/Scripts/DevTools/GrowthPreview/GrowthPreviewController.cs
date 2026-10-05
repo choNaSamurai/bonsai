@@ -36,6 +36,8 @@ namespace PocketArbor.DevTools.GrowthPreview
         [SerializeField, Tooltip("PA-103S: Textured = painted bark, atlas pads, pot/soil/washi art")] bool _textured;
         [SerializeField, Tooltip("PA-103S: realism_l2_painterly.jpg over the preview, aligned by the pot")] bool _referenceOverlay;
         [SerializeField, Range(0f, 1f)] float _referenceAlpha = 0.5f;
+        [SerializeField, Tooltip("PA-102T / TD-073: pot skin pot_<skin>.png/.json — tokoname (with an opening, default) | kuro | celadon | tokoname_v2")]
+        string _potSkin = PreviewArtLibrary.DefaultPotSkin;
 
         GrowthPreviewModel _model;
         TreePreviewMeshBuilder _builder;
@@ -139,10 +141,17 @@ namespace PocketArbor.DevTools.GrowthPreview
         {
             if (root != null) _artRoot = root;
             _art?.Dispose();
-            _art = new PreviewArtLibrary(_artRoot);
+            _art = new PreviewArtLibrary(_artRoot) { PotSkin = _potSkin };
             _art.Load();
             _shownDay = -1;
             Refresh();
+        }
+
+        /// <summary>PA-102T: pot skin (reloads the art).</summary>
+        public void SetPotSkin(string skin)
+        {
+            _potSkin = string.IsNullOrEmpty(skin) ? PreviewArtLibrary.DefaultPotSkin : skin;
+            ReloadArt();
         }
 
         public PreviewArtLibrary Art => _art;
@@ -207,7 +216,7 @@ namespace PocketArbor.DevTools.GrowthPreview
         {
             if (_art == null)
             {
-                _art = new PreviewArtLibrary(_artRoot);
+                _art = new PreviewArtLibrary(_artRoot) { PotSkin = _potSkin };
                 _art.Load();
             }
             if (_view == null)

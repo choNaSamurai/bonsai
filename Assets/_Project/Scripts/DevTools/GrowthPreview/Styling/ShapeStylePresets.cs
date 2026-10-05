@@ -23,6 +23,9 @@ namespace PocketArbor.DevTools.GrowthPreview
         public const double ChokkanCrownLateralAngleMeanDeg = 45.0;
         public const int ChokkanStyleCrownAxisMax = 3;
 
+        /// <summary>⚑T BALANCE §1.6.7: the narrower Chokkan apex has a smaller dome node target.</summary>
+        public const double ChokkanDomeNodeTarget = 12.0;
+
         /// <summary>Profile of <paramref name="style"/>; Moyogi = null (plain config fields — bitwise the same tree as <see cref="ShapeStyleProfile.Moyogi"/>).</summary>
         public static ShapeStyleProfile Profile(ShapeStyle style)
         {
@@ -33,6 +36,7 @@ namespace PocketArbor.DevTools.GrowthPreview
                     {
                         Name = "Chokkan", TrunkSwayScale = 0.0, TrunkLeanOffsetDeg = 0.0, TrunkSwayJitterMinScale = 0.1,
                         TrunkBaseSwayRatio = 0.0, CrownLateralAngleMeanDeg = ChokkanCrownLateralAngleMeanDeg,
+                        DomeNodeTarget = ChokkanDomeNodeTarget,
                     };
                 case ShapeStyle.Shakan:
                     return new ShapeStyleProfile

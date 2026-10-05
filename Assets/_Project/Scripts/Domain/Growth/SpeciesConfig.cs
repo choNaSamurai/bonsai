@@ -51,6 +51,15 @@ namespace PocketArbor.Domain.Growth
         /// </summary>
         public ShapeStyleProfile Style;
 
+        /// <summary>⚑T BALANCE §1.6.1(б) node targets T_g of the side tiers t0…t5 (13 / 13 / 11 / 10 / 9 / 8; range ±2, t1…t5 non-increasing).</summary>
+        public PadNodeTargets PadNodeTarget = new PadNodeTargets(13, 13, 11, 11, 11, 10); // Proposed 13/13/11/10/9/8; PA-102T tuning (t3 +1, t4 +2, t5 +2 — T2): TD-075
+
+        /// <summary>⚑T §1.6.1(б) node target of the dome group (Momiji / Yamazakura 16, Kuromatsu 14; range 12–20).</summary>
+        public int DomeNodeTarget = 16;
+
+        /// <summary>⚑T §1.6.2(в): the crown axis leans towards the shoulder — −s_k·CrownAxisLeanDeg·σ is added to its world angle (range 0–12°).</summary>
+        public double CrownAxisLeanDeg = 12.0; // Proposed 8°; PA-102T tuning → 12° (range 0–12°; dome xc, away from #6): TD-075
+
         public static SpeciesConfig Kuromatsu() => new SpeciesConfig
         {
             Id = SpeciesId.Kuromatsu, KBase = 0.15, BranchAngleMeanDeg = 30.0, BranchAngleSpreadDeg = 10.0, CurvatureSpread = 0.45,
@@ -59,6 +68,7 @@ namespace PocketArbor.Domain.Growth
             // ⚑R §1.5.4 / §1.5.7.
             // PA-102R tuning (TD-047): PrimaryLengthFactor 0.78 → 0.86 (range 0.70–0.90; upper tiers xc, W/P ≤ 1.35).
             TrunkSwayProfile = new TrunkSwayProfile4(1.00, 1.25, 0.95, 0.65), PadTierDecayCompensation = 0.8, PrimaryLengthFactor = 0.86,
+            DomeNodeTarget = 14, // ⚑T §1.6.1(б)
         };
 
         public static SpeciesConfig Momiji() => new SpeciesConfig

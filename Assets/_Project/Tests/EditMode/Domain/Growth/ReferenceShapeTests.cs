@@ -56,9 +56,10 @@ namespace PocketArbor.Domain.Tests.Growth
         }
 
         [Test]
-        public void GrowthRules_Version_IsFourForPa102R()
+        public void GrowthRules_Version_IsFiveForPa102T()
         {
-            Assert.AreEqual(4, GrowthRules.Version, "ADR-0003 §8: 1 = PA-102S, 2 = PA-102P, 3 = PA-102Q, 4 = PA-102R");
+            // Conscious update PA-102T: rules v5 (BALANCE §1.6.7).
+            Assert.AreEqual(5, GrowthRules.Version, "ADR-0003 §8: 1 = PA-102S, 2 = PA-102P, 3 = PA-102Q, 4 = PA-102R, 5 = PA-102T");
         }
 
         // ---- AC10: apical delay of the trunk --------------------------------------------------------------
@@ -142,14 +143,16 @@ namespace PocketArbor.Domain.Tests.Growth
                         for (int i = p + 1; i < nodes.Length; i++)
                         {
                             if (nodes[i].ParentIndex != p || nodes[i].BranchSide == 0) continue;
-                            bool slot1 = nodes[i].AttachT >= 0.65;
-                            if (slot1)
+                            // ⚑T TD-065 (conscious update): the slot is the side; the crown shoulder (slot 0 of k4) sits at AttachT 0.95.
+                            bool slot1 = TreeShapeAnalysis.ChainLateralSlot(nodes[i].BranchSide, k, tree.Genome.Seed) == 1;
+                            if (shape.IsCrownShoulder(i)) Assert.That(nodes[i].AttachT, Is.GreaterThanOrEqualTo(config.CrownShoulderSlotT - config.AttachTJitter - 1e-9));
+                            else if (slot1)
                             {
                                 Assert.That(nodes[i].AttachT, Is.GreaterThanOrEqualTo(0.81));
                                 Assert.AreEqual(sk, nodes[i].BranchSide, species + " seed " + seed + " k=" + k + " slot 1");
                                 slot1Id = nodes[i].Id;
                             }
-                            else
+                            if (!slot1)
                             {
                                 Assert.AreEqual(-sk, nodes[i].BranchSide, species + " seed " + seed + " k=" + k + " slot 0");
                                 slot0Id = nodes[i].Id;

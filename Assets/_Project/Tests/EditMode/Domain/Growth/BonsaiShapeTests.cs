@@ -46,6 +46,12 @@ namespace PocketArbor.Domain.Tests.Growth
                             continue;
                         }
                         Assert.That(t, Is.InRange(0.05, 0.97), at);
+                        // ⚑T §1.6.2(б) (conscious update): the crown shoulder — slot 0 of k4 at CrownShoulderSlotT ± jitter (clamped 0.97).
+                        if (shape.IsCrownShoulder(i))
+                        {
+                            Assert.That(t, Is.InRange(config.CrownShoulderSlotT - config.AttachTJitter - 1e-9, 0.97), at + " shoulder");
+                            continue;
+                        }
                         // ⚑Q BALANCE §1.4.1(в): #0 slots 0.78 / 0.95 ± 0.04 (clamped to 0.97).
                         double slot0Min = config.TrunkBaseSlotT0 - config.AttachTJitter - 1e-9;
                         double slotBoundary = 0.5 * (config.TrunkBaseSlotT0 + config.TrunkBaseSlotT1);
@@ -53,7 +59,7 @@ namespace PocketArbor.Domain.Tests.Growth
                         else Assert.IsTrue((t >= s0 - 0.04 - 1e-9 && t <= s0 + 0.04 + 1e-9) || (t >= 0.81 && t <= 0.89), at + " (slots " + s0 + " / 0.85): " + t);
                         for (int j = i + 1; j < nodes.Length; j++)
                         {
-                            if (nodes[j].ParentIndex == nodes[i].ParentIndex && nodes[j].BranchSide != 0)
+                            if (nodes[j].ParentIndex == nodes[i].ParentIndex && nodes[j].BranchSide != 0 && !shape.IsCrownShoulder(j))
                             {
                                 // #0: slot gap 0.17 − 2·0.04 jitter = 0.09 (§1.4.1(в): «±0.04 does not cross the boundary 0.865»).
                                 double gap = nodes[i].ParentIndex == 0 ? 0.09 - 1e-9 : config.LateralSlotT1 - s0 - 2.0 * config.AttachTJitter - 1e-9;
@@ -297,6 +303,8 @@ namespace PocketArbor.Domain.Tests.Growth
                 for (int i = 1; i < tree.Count; i++)
                 {
                     NodeData n = tree.Nodes[i];
+                    // ⚑T §1.6.2(б) (conscious update): the crown shoulder subtree is the dome (checked in IterationFourShapeTests).
+                    if (InShoulder(tree, shape, i)) continue;
                     int tier = PadTier(tree, shape, i, config);
                     double exponent = tier >= 0 ? n.Depth - 1 - speciesConfig.PadTierDecayCompensation * tier : n.Depth - 1;
                     double baseLength = config.ShootBaseLength * Math.Pow(config.ShootLengthDecay, exponent) * (tier >= 0 ? config.PadLengthFactor : 1.0);
@@ -603,6 +611,12 @@ namespace PocketArbor.Domain.Tests.Growth
             b = TreeGraph.FromSnapshot(b.ToSnapshot());
             ShapeMetrics.RunDays(sim, b, 30);
             Assert.IsTrue(a.ToSnapshot().BitwiseEquals(b.ToSnapshot()));
+        }
+
+        static bool InShoulder(TreeGraph tree, TreeShapeAnalysis shape, int i)
+        {
+            for (int j = i; j > 0; j = tree.Nodes[j].ParentIndex) if (shape.IsCrownShoulder(j)) return true;
+            return false;
         }
     }
 }

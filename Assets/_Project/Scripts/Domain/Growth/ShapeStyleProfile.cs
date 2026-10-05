@@ -51,10 +51,25 @@ namespace PocketArbor.Domain.Growth
         public double PrimaryReachCompensation = double.NaN;
         public double DomeLateralWeight = double.NaN;
 
+        // ⚑T BALANCE §1.6 (PA-102T): «Яруси» (node targets), «Купол» (dome target, crown-axis lean — × σ in the model).
+        /// <summary>Node targets of t0…t5; a negative component = inherit the species component.</summary>
+        public PadNodeTargets PadNodeTarget = PadNodeTargets.Unset;
+        /// <summary>Dome node target (NaN = inherit; Chokkan preset 12).</summary>
+        public double DomeNodeTarget = double.NaN;
+        public double CrownAxisLeanDeg = double.NaN;
+
         /// <summary>Default style (the L2 reference): σ 1, λ 0, jitter floor 0.1, no overrides.</summary>
         public static ShapeStyleProfile Moyogi() => new ShapeStyleProfile();
 
         public ShapeStyleProfile Clone() => (ShapeStyleProfile)MemberwiseClone();
+
+        /// <summary>Composition-time check (ADR-0010 rev.3): DomeNodeTarget is NaN (inherit) or a non-negative integer.</summary>
+        public void Validate()
+        {
+            double d = DomeNodeTarget;
+            if (!double.IsNaN(d) && (double.IsInfinity(d) || d < 0.0 || d != System.Math.Floor(d)))
+                throw new System.ArgumentException("DomeNodeTarget must be NaN or a non-negative integer");
+        }
     }
 
     /// <summary>
@@ -92,6 +107,11 @@ namespace PocketArbor.Domain.Growth
         public readonly double PadLengthFactor;
         public readonly double PrimaryReachCompensation;
         public readonly double DomeLateralWeight;
+        /// <summary>⚑T §1.6.1(б): T_g of t0…t5 (style over species) and of the dome.</summary>
+        public readonly PadNodeTargets PadNodeTarget;
+        public readonly int DomeNodeTarget;
+        /// <summary>⚑T §1.6.2(в): lean of the crown axis towards the shoulder, degrees (before σ).</summary>
+        public readonly double CrownAxisLeanDeg;
 
         ShapeParams(GrowthConfig c, SpeciesConfig s, ShapeStyleProfile p)
         {
@@ -126,7 +146,16 @@ namespace PocketArbor.Domain.Growth
             PadLengthFactor = Pick(p?.PadLengthFactor, c.PadLengthFactor);
             PrimaryReachCompensation = Pick(p?.PrimaryReachCompensation, c.PrimaryReachCompensation);
             DomeLateralWeight = Pick(p?.DomeLateralWeight, c.DomeLateralWeight);
+            PadNodeTarget = p != null ? p.PadNodeTarget.Over(in s.PadNodeTarget) : s.PadNodeTarget;
+            double dome = Pick(p?.DomeNodeTarget, s.DomeNodeTarget);
+            DomeNodeTarget = dome < 0.0 ? 0 : dome > int.MaxValue ? int.MaxValue : (int)System.Math.Round(dome);
+            CrownAxisLeanDeg = Pick(p?.CrownAxisLeanDeg, s.CrownAxisLeanDeg);
         }
+
+        /// <summary>⚑T §1.6.1(б) T_g of <paramref name="group"/>: t0…t5 — PadNodeTarget, dome — DomeNodeTarget; −1 = no target (chain, other).</summary>
+        public int TierTarget(PocketArbor.Domain.Tree.TierGroup group) =>
+            group <= PocketArbor.Domain.Tree.TierGroup.T5 ? PadNodeTarget[(int)group]
+            : group == PocketArbor.Domain.Tree.TierGroup.Dome ? DomeNodeTarget : -1;
 
         /// <summary>|h_k|·Irregularity &lt; 1 keeps every A_k positive (alternation of the S-curve).</summary>
         const double MaxIrregularity = 0.99;

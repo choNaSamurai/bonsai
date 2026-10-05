@@ -47,7 +47,9 @@ namespace PocketArbor.Domain.Tests.Growth
                     }
                     else if (shape.IsCrownAxis(i))
                     {
-                        if (!clamped) Assert.AreEqual(lean, world, config.ApicalAngleJitterDeg + Eps, "crown axis at " + i);
+                        // ⚑T §1.6.2(в) (conscious update): + −s_top·CrownAxisLeanDeg·σ towards the crown shoulder.
+                        double crownLean = ShootBuilder.CrownAxisLeanDeg(tree.Genome.Seed, ShapeParams.Resolve(config, species), config);
+                        if (!clamped) Assert.AreEqual(lean + crownLean, world, config.ApicalAngleJitterDeg + Eps, "crown axis at " + i);
                     }
                     else
                     {
@@ -63,8 +65,8 @@ namespace PocketArbor.Domain.Tests.Growth
                     lateralSide[p] = n.BranchSide;
                     if (shape.IsTrunkChain(p))
                     {
-                        double boundary = p == 0 ? 0.5 * (config.TrunkBaseSlotT0 + config.TrunkBaseSlotT1) : 0.5 * (config.LateralSlotT0 + config.LateralSlotT1);
-                        bool slot0 = n.AttachT < boundary;
+                        // ⚑T TD-065 (conscious update): the slot of a chain lateral is its side (the shoulder sits at AttachT 0.95 in slot 0).
+                        bool slot0 = TreeShapeAnalysis.ChainLateralSlot(n.BranchSide, nodes[p].Depth, tree.Genome.Seed) == 0;
                         // ⚑P BALANCE §1.3.2: slot 1 on s_k = TierPhase·(−1)^k, slot 0 on −s_k.
                         int sk = ShootBuilder.TierSide(nodes[p].Depth, tree.Genome.Seed);
                         Assert.AreEqual(slot0 ? -sk : sk, n.BranchSide, "primary side = slot1 ? s_k : −s_k at " + i);
@@ -72,7 +74,7 @@ namespace PocketArbor.Domain.Tests.Growth
                         {
                             bool inPrimary = InRange(Math.Abs(world), species.PrimaryAngleMeanDeg, species.PrimaryAngleSpreadDeg);
                             // §1.3.2 apex dome: laterals of the chain top born before the crown axis take the crown-lateral angle.
-                            bool inDome = nodes[p].Depth == config.TrunkChainSegments - 1
+                            bool inDome = (nodes[p].Depth == config.TrunkChainSegments - 1 || shape.IsCrownShoulder(i))
                                 && InRange(Math.Abs(world), species.CrownLateralAngleMeanDeg, species.CrownLateralAngleSpreadDeg);
                             Assert.IsTrue(inPrimary || inDome, "primary angle at " + i + ": " + world);
                         }

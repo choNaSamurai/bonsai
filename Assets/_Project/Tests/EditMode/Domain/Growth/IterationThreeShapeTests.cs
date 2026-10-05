@@ -230,6 +230,8 @@ namespace PocketArbor.Domain.Tests.Growth
                         if (!shape.IsTrunkChain(k)) continue;
                         NodeData primaryNode = ShootBuilder.Build(tree, k, Draws(), flat, species);
                         if (primaryNode.BranchSide == 0) continue;
+                        // ⚑T §1.6.2(б) (conscious update): slot 0 of k4 is the crown shoulder (× CrownLateralLengthFactor, no primary factor).
+                        if (shape.ChainSlot1Taken(k) && ShootBuilder.IsShoulderSlot(tree.Nodes[k].Depth, flat)) continue;
                         Assert.AreEqual(flat.ShootBaseLength * Math.Pow(0.85, tree.Nodes[k].Depth) * 0.70 * species.PrimaryLengthFactor, primaryNode.TargetLength, Exact, id + " chain k" + tree.Nodes[k].Depth);
                         firstNodes++;
                     }

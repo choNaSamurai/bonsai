@@ -22,6 +22,8 @@ namespace PocketArbor.Domain.Growth
             Continuation,
             Primary,
             Secondary,
+            /// <summary>⚑T BALANCE §1.6.2(б): slot 0 of the chain top — a dome lateral (#7).</summary>
+            CrownShoulder,
         }
 
         /// <param name="applyApicalDelay">False only for planting: the sapling leader is the apical child of #0 by definition (§1.2.8).</param>
@@ -51,9 +53,13 @@ namespace PocketArbor.Domain.Growth
             double slotT0 = parentIndex == 0 ? config.TrunkBaseSlotT0 : parentCrown ? config.CrownLateralSlotT0 : config.LateralSlotT0;
             double slotT1 = parentIndex == 0 ? config.TrunkBaseSlotT1 : config.LateralSlotT1;
             double slotBoundary = 0.5 * (slotT0 + slotT1);
+            // ⚑T BALANCE §1.6.1(а): a chain lateral's slot is its side (slot 1 on s_k, slot 0 on −s_k) — identical to the AttachT midpoint for
+            // every PA-102R tree, and exact for the crown shoulder (slot 0 at AttachT 0.95).
+            int chainTierSide = parentChain ? TierSide(parent.Depth, genome.Seed) : 0; // == TreeShapeAnalysis.ChainLateralSlot side
             bool hasApical = false;
             bool slot0Taken = false;
             bool slot1Taken = false;
+            int laterals = 0;
             sbyte newestLateralSide = 0;
             for (int i = parentIndex + 1; i < nodes.Length; i++)
             {
@@ -63,15 +69,20 @@ namespace PocketArbor.Domain.Growth
                     hasApical = true;
                     continue;
                 }
-                if (nodes[i].AttachT < slotBoundary) slot0Taken = true;
+                bool slot0 = parentChain ? TreeShapeAnalysis.ChainLateralSlot(nodes[i].BranchSide, parent.Depth, genome.Seed) == 0
+                    : nodes[i].AttachT < slotBoundary;
+                if (slot0) slot0Taken = true;
                 else slot1Taken = true;
+                laterals++;
                 newestLateralSide = nodes[i].BranchSide;
             }
 
             double parentWorld = tree.WorldAngle(parentIndex);
             double jitter = u.U2 + u.U3 - 1.0; // triangular in [−1, 1]
             // ⚑P BALANCE §1.3.1: an ord-0 node (chain or crown axis) takes an apical child only after its apical delay.
-            bool apical = !hasApical && !(applyApicalDelay && parentOrder == 0 && IsApicalDelayed(parent, config));
+            // ⚑T §1.6.2(а): a crown-axis node — only once it has CrownApicalNeedsLaterals live laterals; §1.6.1(в): an ord ≥ 1 node with a fresh
+            // cut (pinch) — never (laterals only).
+            bool apical = !hasApical && !MustBeLateral(in parent, parentOrder, parentCrown, laterals, tree.Growth.GrowthDayIndex, config, applyApicalDelay);
             Role role;
             sbyte side = 0;
             double attachT = 1.0;
@@ -92,7 +103,9 @@ namespace PocketArbor.Domain.Growth
                     role = Role.CrownAxis;
                     // BALANCE §1.2: interpretation — crown axis has ordEff = 1 (TD-022); its length factor is §1.3.1 CrownAxisLengthFactor.
                     orderEff = 1;
-                    worldDeg = genome.BendBias * config.TrunkBendScaleDeg + config.ApicalAngleJitterDeg * jitter;
+                    // ⚑T §1.6.2(в): + −s_top·CrownAxisLeanDeg·σ (towards the shoulder, against the last bend of the chain).
+                    worldDeg = genome.BendBias * config.TrunkBendScaleDeg + config.ApicalAngleJitterDeg * jitter
+                        + CrownAxisLeanDeg(genome.Seed, in shape, config);
                 }
                 else
                 {
@@ -109,10 +122,20 @@ namespace PocketArbor.Domain.Growth
                 // ⚑P BALANCE §1.3.2: a trunk-chain parent fills slot 1 (the tier on the outer side of the bend) before slot 0;
                 // other parents — slot 0 first (§1.2.1). A lateral with AttachT below the slot midpoint occupies slot 0.
                 int slot = parentChain ? (slot1Taken ? 0 : 1) : (slot0Taken ? 1 : 0);
-                attachT = GrowthFormulas.Clamp((slot == 0 ? slotT0 : slotT1) + config.AttachTJitter * (2.0 * u.U8 - 1.0),
-                    config.AttachTMin, config.AttachTMax);
+                // ⚑T §1.6.2(б): slot 0 of the chain top is the crown shoulder (AttachT CrownShoulderSlotT).
+                bool shoulder = parentChain && slot == 0 && IsShoulderSlot(parent.Depth, config);
+                double slotT = shoulder ? config.CrownShoulderSlotT : slot == 0 ? slotT0 : slotT1;
+                attachT = GrowthFormulas.Clamp(slotT + config.AttachTJitter * (2.0 * u.U8 - 1.0), config.AttachTMin, config.AttachTMax);
                 orderEff = parentOrder + 1;
-                if (parentChain)
+                if (shoulder)
+                {
+                    // A dome lateral on −s_k (opposite the k-top tier #6): world angle CrownLateralAngle*, length × CrownLateralLengthFactor.
+                    role = Role.CrownShoulder;
+                    side = (sbyte)-chainTierSide;
+                    double worldDeg = side * GrowthFormulas.Triangular(shape.CrownLateralAngleMeanDeg, shape.CrownLateralAngleSpreadDeg, u.U2, u.U3);
+                    relative = worldDeg * GrowthFormulas.DegToRad - parentWorld;
+                }
+                else if (parentChain)
                 {
                     role = Role.Primary;
                     // ⚑P BALANCE §1.3.2: slot 1 on s_k = TierPhase·(−1)^k (where segment k leans), slot 0 on −s_k.
@@ -167,7 +190,7 @@ namespace PocketArbor.Domain.Growth
                     break;
             }
 
-            double axisFactor = AxisFactor(nodes, parentIndex, role, parentChain, parentCrown, parentOrder, config, in shape, out int padTier);
+            double axisFactor = AxisFactor(nodes, parentIndex, role, parentChain, parentCrown, parentOrder, config, in shape, genome.Seed, out int padTier);
             double targetLength = TargetLength(role, depth, orderEff, u.U5, config, in shape, axisFactor, padTier);
             // ⚑R BALANCE §1.5.4(б): the first node of a primary is shortened / lengthened by the S-offset of its attachment.
             if (role == Role.Primary) targetLength = ReachCompensatedLength(tree, parentIndex, attachT, side, world, targetLength, config, in shape);
@@ -229,10 +252,11 @@ namespace PocketArbor.Domain.Growth
         /// ord-1 axis rooted on the crown axis — CrownLateralLengthFactor; otherwise 1. No RNG, O(depth), allocation-free.
         /// </summary>
         static double AxisFactor(ReadOnlySpan<NodeData> nodes, int parentIndex, Role role, bool parentChain, bool parentCrown, int parentOrder,
-            GrowthConfig config, in ShapeParams shape, out int padTier)
+            GrowthConfig config, in ShapeParams shape, uint seed, out int padTier)
         {
             padTier = -1;
             if (role == Role.Primary) return shape.PrimaryLengthFactor;
+            if (role == Role.CrownShoulder) return shape.CrownLateralLengthFactor;
             if (role == Role.TrunkSegment || role == Role.CrownAxis || parentOrder < 1) return parentCrown && role == Role.Secondary
                 ? shape.CrownLateralLengthFactor : 1.0;
             // ⚑R §1.5.2(а): the parent lies in an ord ≥ 1 subtree; its topmost lateral (the ord-1 axis root) sits on an ord-0 node —
@@ -244,6 +268,12 @@ namespace PocketArbor.Domain.Growth
             }
             int axisParent = ord1Root > 0 ? nodes[ord1Root].ParentIndex : -1;
             bool chainRooted = axisParent >= 0 && nodes[axisParent].Depth < config.TrunkChainSegments;
+            // ⚑T §1.6.2(б): the crown shoulder's subtree is the dome — like a crown-axis lateral (no pad-tier compensation).
+            if (chainRooted && IsShoulderSlot(nodes[axisParent].Depth, config)
+                && nodes[ord1Root].BranchSide == -TierSide(nodes[axisParent].Depth, seed))
+            {
+                return role == Role.Secondary || parentOrder != 1 ? 1.0 : shape.CrownLateralLengthFactor;
+            }
             if (chainRooted) padTier = nodes[axisParent].Depth;
             if (role == Role.Secondary || parentOrder != 1 || axisParent < 0) return 1.0;
             // The parent of an ord-1 axis root is an ord-0 node: chain (Depth < segments) or crown axis.
@@ -289,6 +319,31 @@ namespace PocketArbor.Domain.Growth
         /// i.e. towards the side segment k leans to — the outer side of its top bend).</summary>
         public static double TrunkBowCurvature(int k, uint seed, in ShapeParams shape) =>
             TreeShapeAnalysis.TierPhase(seed) * ((k & 1) == 0 ? 1.0 : -1.0) * shape.TrunkBowCurvature * shape.SwayScale;
+
+        /// <summary>
+        /// TD-066: one predicate of the shoot type — a node without an apical child takes only a lateral when (ord 0) its apical delay lasts
+        /// (⚑P §1.3.1; skipped for planting), (crown axis) it has fewer than CrownApicalNeedsLaterals laterals (⚑T §1.6.2 а), or (ord ≥ 1) it is
+        /// pinched (⚑T §1.6.1 в). Used by GrowthSimulator (roles / weight group) and Build (apical or lateral).
+        /// </summary>
+        public static bool MustBeLateral(in NodeData node, int order, bool crownAxis, int laterals, int growthDayIndex, GrowthConfig config,
+            bool applyApicalDelay = true)
+        {
+            if (order >= 1) return IsPinched(in node, growthDayIndex, config);
+            if (applyApicalDelay && IsApicalDelayed(in node, config)) return true;
+            return crownAxis && laterals < config.CrownApicalNeedsLaterals;
+        }
+
+        /// <summary>⚑T BALANCE §1.6.1(в): pinch — GrowthConfig.PinchLateralOnly ∧ a fresh cut at the node (GrowthDayIndex − LastCutDay &lt; BackBudDays).
+        /// The caller checks ord ≥ 1 and the missing apical child.</summary>
+        public static bool IsPinched(in NodeData node, int growthDayIndex, GrowthConfig config) =>
+            config.PinchLateralOnly && node.LastCutDay >= 0 && growthDayIndex - node.LastCutDay < config.BackBudDays;
+
+        /// <summary>⚑T §1.6.2(б): slot 0 of chain node <paramref name="k"/> is the crown shoulder (the chain top with CrownShoulderSlotT &gt; 0).</summary>
+        public static bool IsShoulderSlot(int k, GrowthConfig config) => config.CrownShoulderSlotT > 0.0 && k == config.TrunkChainSegments - 1;
+
+        /// <summary>⚑T §1.6.2(в): −s_top·CrownAxisLeanDeg·σ, s_top = TierSide(TrunkChainSegments − 1) (degrees, + = counter-clockwise).</summary>
+        public static double CrownAxisLeanDeg(uint seed, in ShapeParams shape, GrowthConfig config) =>
+            -TierSide(config.TrunkChainSegments - 1, seed) * shape.CrownAxisLeanDeg * shape.SwayScale;
 
         /// <summary>⚑P BALANCE §1.3.1: AgeDays of an ord-0 node of index k = Depth is below TrunkApicalDelayBaseDays + StepDays·k.</summary>
         public static bool IsApicalDelayed(in NodeData node, GrowthConfig config) =>

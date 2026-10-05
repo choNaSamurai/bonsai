@@ -22,6 +22,10 @@ namespace PocketArbor.Domain.Growth
         readonly double[] _weights = new double[TreeGraph.Capacity];
         readonly double[] _selectionWeights = new double[TreeGraph.Capacity];
         readonly int[] _order = new int[TreeGraph.Capacity];
+        // ⚑T BALANCE §1.6.1(б): weight group of each candidate and the per-group raw mass R_g / multiplier B_g (fixed size, 0 GC).
+        readonly byte[] _candidateGroup = new byte[TreeGraph.Capacity];
+        readonly double[] _groupMass = new double[TierGroups.Count];
+        readonly double[] _groupFactor = new double[TierGroups.Count];
         readonly TreeShapeAnalysis _shape = new TreeShapeAnalysis();
 
         public GrowthSimulator(GrowthConfig config, SoilConfig soil, SpeciesCatalog species)
@@ -228,13 +232,16 @@ namespace PocketArbor.Domain.Growth
 
         /// <summary>
         /// ⚑ BALANCE §1.2.7 / ⚑P §1.3.1, §1.3.4, §1.3.5: selection weights s_i = w_i · RoleWeight_i · BackBud_i, roles recomputed
-        /// before every shoot. Returns Σs. The rate (step 6.2) still uses Σw.
+        /// before every shoot. Returns Σs'. The rate (step 6.2) still uses Σw.
         /// Roles: trunk chain without an apical child — ApicalDominanceWeight once the apical delay has passed, else TierWeight if a
         /// lateral slot is free, else 0; trunk chain with an apical child — TierWeight; otherwise InPad ? PadWeight : InteriorWeight
         /// (the crown axis too, but 0 while its apical delay lasts and both lateral slots are taken).
         /// BackBud_i = BackBudWeightMultiplier when BackBudDist ≤ BackBudRadiusEdges ∧ ord ≥ 1, else 1.
-        /// ⚑Q §1.4.4: × DomeWeightMultiplier for the dome subtree (crown-axis nodes and all their descendants).
+        /// ⚑Q §1.4.4: × DomeWeightMultiplier for the dome subtree (crown-axis nodes and all their descendants; ⚑T + the crown shoulder).
         /// ⚑R §1.5.6: a crown-axis node with a free lateral slot takes DomeLateralWeight (instead of Pad / Interior), then × DomeWeightMultiplier.
+        /// ⚑T §1.6.1(в) pinch / §1.6.2(а) laterals first: such a node is «lateral only» like a delayed ord-0 node (0 without a free slot).
+        /// ⚑T §1.6.1(б): s'_i = s_i·B_g(i) — the group a candidate's shoot is weighed in (<see cref="TreeShapeAnalysis.WeightGroup"/>), R_g = Σ s_i
+        /// over the group, B_g = <see cref="GrowthFormulas.TierBalanceFactor"/> (t0…t5, dome), 1 for the chain / other groups.
         /// </summary>
         double ComputeSelectionWeights(TreeGraph tree, SpeciesConfig species, in ShapeParams shape, int candidateCount)
         {
@@ -243,22 +250,46 @@ namespace PocketArbor.Domain.Growth
             ReadOnlySpan<NodeData> nodes = tree.Nodes;
             _shape.Analyze(nodes, TreeShapeAnalysis.Params(tree, cfg, species));
             int lateralSlots = cfg.MaxChildrenPerNode - 1;
-            double sum = 0.0;
+            int day = tree.Growth.GrowthDayIndex;
+            for (int g = 0; g < TierGroups.Count; g++) _groupMass[g] = 0.0;
+            double total = 0.0;
             for (int c = 0; c < candidateCount; c++)
             {
                 int i = _candidates[c];
                 bool axis = _shape.Order(i) == 0;
-                // An ord-0 node without an apical child whose delay still lasts can only take a lateral (BALANCE §1.3.1).
-                bool lateralOnly = axis && _shape.ApicalChild(i) < 0 && ShootBuilder.IsApicalDelayed(in nodes[i], cfg);
-                bool slotFree = _shape.ChildCount(i) - (_shape.ApicalChild(i) >= 0 ? 1 : 0) < lateralSlots;
+                bool noApical = _shape.ApicalChild(i) < 0;
+                int laterals = _shape.ChildCount(i) - (noApical ? 0 : 1);
+                // An ord-0 node without an apical child whose delay still lasts can only take a lateral (BALANCE §1.3.1);
+                // ⚑T the same for a crown-axis node with fewer than CrownApicalNeedsLaterals laterals and for a pinched ord ≥ 1 tip.
+                bool lateralOnly = noApical && ShootBuilder.MustBeLateral(in nodes[i], _shape.Order(i), _shape.IsCrownAxis(i), laterals, day, cfg);
+                bool slotFree = laterals < lateralSlots;
                 double role;
                 if (lateralOnly && !slotFree) role = 0.0;
-                else if (_shape.IsTrunkChain(i)) role = _shape.ApicalChild(i) < 0 && !lateralOnly ? cfg.ApicalDominanceWeight : cfg.TierWeight;
+                else if (_shape.IsTrunkChain(i)) role = noApical && !lateralOnly ? cfg.ApicalDominanceWeight : cfg.TierWeight;
                 else if (slotFree && _shape.IsCrownAxis(i)) role = shape.DomeLateralWeight;
                 else role = _shape.InPad(i) ? cfg.PadWeight : cfg.InteriorWeight;
                 if (_shape.InDome(i)) role *= domeWeight;
                 if (!axis && _shape.BackBudDist(i) <= cfg.BackBudRadiusEdges) role *= cfg.BackBudWeightMultiplier;
                 double s = _weights[c] * role;
+                _selectionWeights[c] = s;
+                TierGroup group = _shape.WeightGroup(i, noApical && !lateralOnly);
+                _candidateGroup[c] = (byte)group;
+                _groupMass[(int)group] += s;
+                total += s;
+            }
+
+            // §1.6.1(б): one multiplier per group (t0…t5, dome); chain / other — 1.
+            for (int g = 0; g < TierGroups.Count; g++)
+            {
+                var group = (TierGroup)g;
+                _groupFactor[g] = TierGroups.IsBalanced(group)
+                    ? GrowthFormulas.TierBalanceFactor(_groupMass[g], total, _shape.GroupCount(group), shape.TierTarget(group), cfg)
+                    : 1.0;
+            }
+            double sum = 0.0;
+            for (int c = 0; c < candidateCount; c++)
+            {
+                double s = _selectionWeights[c] * _groupFactor[_candidateGroup[c]];
                 _selectionWeights[c] = s;
                 sum += s;
             }

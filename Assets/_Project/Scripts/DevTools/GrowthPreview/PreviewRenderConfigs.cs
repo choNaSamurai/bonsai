@@ -1,4 +1,5 @@
 using PocketArbor.Domain.Tree;
+using UnityEngine;
 
 namespace PocketArbor.DevTools.GrowthPreview
 {
@@ -32,12 +33,30 @@ namespace PocketArbor.DevTools.GrowthPreview
 
         // ⚑P BALANCE §1.3.3 Nebari: roots = clamp(round(NebariRootsMin + (th0 − TrunkInitialThickness) / NebariThicknessPerRoot), min, max).
         public int NebariRootsMin = 2;
-        public int NebariRootsMax = 7;
-        public float NebariThicknessPerRoot = 2.2f;
+        public int NebariRootsMax = 10; // ⚑T BALANCE §1.6.4: 7 → 10 (range 8–10)
+        public float NebariThicknessPerRoot = 1.6f; // ⚑T §1.6.4: 2.2 → 1.6 (range 1.4–2.0) → D80 9 roots
 
         /// <summary>Visible root length = th0 × [min, max] (long/short alternation, hash). ⚑R BALANCE §1.5.5: 0.9–1.4 → 1.0–1.5.</summary>
         public float NebariRootLengthMin = 1.0f;
         public float NebariRootLengthMax = 1.5f;
+
+        /// <summary>⚑T BALANCE §1.6.4: the first NebariRootMainCount fan slots are main roots (buttresses), the rest minor (TD-071: the role never changes
+        /// with n). Visible length × th0: main 1.2–1.6 (slot 2 — the longest, «back» root), minor 0.7–1.1 (hash). Base thickness × th0: main 0.32–0.40,
+        /// minor 0.16–0.26 (hash). Minor roots start lower on the flare (0.35–0.50·th0 of #0 arc). Replace NebariRootLength*/NebariRootThickness*.</summary>
+        public int NebariRootMainCount = 3;
+        public float NebariRootLengthMainMin = 1.2f, NebariRootLengthMainMax = 1.6f;
+        public float NebariRootLengthMinorMin = 0.7f, NebariRootLengthMinorMax = 1.1f;
+        public float NebariRootThicknessMainMin = 0.32f, NebariRootThicknessMainMax = 0.40f;
+        public float NebariRootThicknessMinorMin = 0.16f, NebariRootThicknessMinorMax = 0.26f;
+        public float NebariRootMinorStartMin = 0.35f, NebariRootMinorStartMax = 0.50f;
+
+        /// <summary>⚑T §1.6.4: a root with base thickness ≥ NebariRootForkMinRatio·th0 forks once at t ∈ [ForkTMin, ForkTMax] of its length (hash, on the moss
+        /// shelf): the root continues × NebariRootForkMainScale, a side branch × NebariRootForkSideScale of the fork width diverges by
+        /// NebariRootForkAngle (18–30°, hash) — away from the viewer (up the receding moss) — and lies on the moss.</summary>
+        public float NebariRootForkMinRatio = 0.28f;
+        public float NebariRootForkTMin = 0.50f, NebariRootForkTMax = 0.70f;
+        public float NebariRootForkAngleMinDeg = 18f, NebariRootForkAngleMaxDeg = 30f;
+        public float NebariRootForkMainScale = 0.60f, NebariRootForkSideScale = 0.45f;
 
         /// <summary>Root base thickness = th0 × [min, max] (alternation); the visible end keeps NebariRootTipRatio of it.
         /// ⚑R BALANCE §1.5.5: 0.30–0.42 → 0.42–0.55 (ranges 0.38–0.48 / 0.50–0.60), tip 0.45 → 0.50.</summary>
@@ -71,7 +90,7 @@ namespace PocketArbor.DevTools.GrowthPreview
 
         /// <summary>Azimuth of root i = NebariFanSlots[i]·NebariFanDeg + hash·jitter (slot table by index, ADR-0004 rev.3 §1):
         /// ≥ 2 roots per side from n ≥ 4, one front root from n ≥ 5.</summary>
-        public float[] NebariFanSlots = { -0.80f, 0.80f, -0.45f, 0.45f, 0.12f, -1.00f, 1.00f };
+        public float[] NebariFanSlots = { -0.82f, 0.82f, -1.00f, 0.45f, -0.45f, 0.12f, 1.00f, -0.22f, 0.62f, -0.62f }; // ⚑T §1.6.4 / TD-071: 10 slots, 0–2 main
         public float NebariFanJitterDeg = 10f;
         public float NebariFrontRootDeg = 25f;
         public float NebariFrontRootScale = 0.6f;
@@ -121,6 +140,11 @@ namespace PocketArbor.DevTools.GrowthPreview
         /// (fibre angle ≈ atan 0.3 ≈ 17°), sign by the bend of the segment (TierPhase·(−1)^k), × σ (Chokkan — straight fibres). Range 0.15–0.45 (TA).</summary>
         public float BarkTwistShear = 0.30f;
 
+        /// <summary>⚑T BALANCE §1.6.6 (shared, TD-068): bark is young at Thickness ≤ BarkYoungMaxThickness, mature at ≥ BarkMatureThickness, lerp between
+        /// (replaces TexturedStyleConfig.YoungMaxWidth / TrunkMinWidth 1.6 / 6).</summary>
+        public float BarkYoungMaxThickness = 2.5f;
+        public float BarkMatureThickness = 7f;
+
         /// <summary>AC21 (TD-035 fix): a lateral ribbon (and a Nebari root) is visible only from this many pixels inside its parent's silhouette edge
         /// (covers the parent's ink line); inside it is transparent, so no square «patch» of the collar shows on the parent.</summary>
         public float CollarOverlapPx = 3.2f;
@@ -162,6 +186,33 @@ namespace PocketArbor.DevTools.GrowthPreview
         public int PadMaxRowsSide = 1; // PA-102P tuning: 2 → 1 (±1 row allowed; TA: side pads of L2 are one sprite row, TD-031)
         public int PadMaxRowsDome = 3;
 
+        /// <summary>⚑T BALANCE §1.6.3(б): the sprite bbox of a side pad of tier k_t is at most (Base − PerTier·k_t) × its width tall (squashed about its
+        /// centre; the dome is exempt). Ranges 0.42–0.50 / 0–0.025.</summary>
+        public float PadSideMaxAspectBase = 0.44f; // Proposed 0.46; PA-102T tuning (range 0.42–0.50): TD-075
+        public float PadSideMaxAspectPerTier = 0.025f; // Proposed 0.015; PA-102T tuning (range 0–0.025): TD-075
+
+        /// <summary>⚑T §1.6.3(в): side pads of the groups t4, t5 are laid out as a full pad (and get PadSideMinSpanUnits) from this many nodes
+        /// (the rest — GrowthConfig.PadFullNodes 4). Range 2–4.</summary>
+        public int PadFullNodesTopTiers = 3;
+
+        /// <summary>⚑T §1.6.5(а): two side pads (or two dome pads) whose sprite bboxes overlap by ≥ this × the smaller bbox area are laid out as one
+        /// cluster pad (≤ PadMaxRowsSide + 1 rows). 0 = off. Range 0.25–0.50.</summary>
+        public float PadMergeOverlapRatio = 0.35f;
+
+        /// <summary>⚑T §1.6.5(а) guard (GP, TD-074): a merge is accepted only while the cluster bbox stays ≤ this × the taller of the two boxes high (one shelf;
+        /// transitive chains of small pads would otherwise become one tall cluster that a ≤ 2-row layout leaves bare).</summary>
+        public float PadMergeMaxHeightRatio = 1.5f;
+
+        /// <summary>⚑T §1.6.5(б): sprites of one (cluster) pad whose centres are closer than this × PuffRadius merge into one (centre — mean, size — max;
+        /// kept: larger LeafScale, then smaller Id). 0 = off. Range 0.45–0.75.</summary>
+        public float PuffMinSpacingRatio = 0.60f;
+
+        /// <summary>⚑T §1.6.3(б): max sprite-bbox height / width of a side pad of chain index <paramref name="tier"/> (t0/t1 → 0 … t5 → 4).</summary>
+        public float SideMaxAspect(int tier) => PadSideMaxAspectBase - PadSideMaxAspectPerTier * Mathf.Max(0, tier);
+
+        /// <summary>Dev tuning knobs of the PA-102T harness (-cfg Field=… for any float/int field of FoliageConfig): applied by <see cref="For"/>.</summary>
+        public static readonly System.Collections.Generic.Dictionary<string, float> FieldOverrides = new System.Collections.Generic.Dictionary<string, float>();
+
         /// <summary>Dev tuning knob of the PA-102P harness (-cfg PuffRadiusScale=…): scales PuffRadius of every species.</summary>
         public static float PuffRadiusScale = 1f;
 
@@ -175,6 +226,12 @@ namespace PocketArbor.DevTools.GrowthPreview
             c.PuffRadius *= PuffRadiusScale;
             if (!float.IsNaN(RowSlopeMaxSideOverride)) c.PadRowSlopeMaxSide = RowSlopeMaxSideOverride;
             if (!float.IsNaN(SideMinSpanOverride)) c.PadSideMinSpanUnits = SideMinSpanOverride;
+            foreach (var kv in FieldOverrides)
+            {
+                System.Reflection.FieldInfo f = typeof(FoliageConfig).GetField(kv.Key);
+                if (f == null || f.IsStatic) continue;
+                f.SetValue(c, f.FieldType == typeof(int) ? (object)Mathf.RoundToInt(kv.Value) : kv.Value);
+            }
             return c;
         }
 

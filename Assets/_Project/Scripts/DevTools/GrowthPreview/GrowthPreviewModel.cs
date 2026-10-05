@@ -73,6 +73,7 @@ namespace PocketArbor.DevTools.GrowthPreview
             if (style == _shapeStyle) return;
             _shapeStyle = style;
             ShapeStyleProfile profile = ShapeStylePresets.Profile(style);
+            profile?.Validate();
             _species.Get(SpeciesId.Kuromatsu).Style = profile;
             _species.Get(SpeciesId.Momiji).Style = profile;
             _species.Get(SpeciesId.Yamazakura).Style = profile;
@@ -201,7 +202,8 @@ namespace PocketArbor.DevTools.GrowthPreview
             if (_styled && _style.IsStyleDay(day))
             {
                 _styler.PruneToStyle(tree, _config, SpeciesConfig, _style);
-                _gapStats[day] = new[] { _styler.LastGapPairs, _styler.LastGapPairsOk, _styler.LastGapFirstNodeCuts, _styler.LastGapPairsStuck };
+                _gapStats[day] = new[] { _styler.LastGapPairs, _styler.LastGapPairsOk, _styler.LastGapFirstNodeCuts, _styler.LastGapPairsStuck,
+                    _styler.LastCeilingGroups, _styler.LastCeilingGroupsOver };
             }
             ApplyCuts(tree, day, _cuts.Count);
             return tree.ToSnapshot();

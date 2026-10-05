@@ -254,7 +254,9 @@ namespace PocketArbor.DevTools.GrowthPreview
             ReadOnlySpan<NodeData> span = tree.Nodes;
             _count = span.Length;
             span.CopyTo(_nodes);
-            _shape.Analyze(span, growth.TrunkChainSegments, species.PadDepth);
+            // ⚑T BALANCE §1.6.1(а): seed + shoulder → tier groups, the crown shoulder and chain slots by side (no back-budding context needed).
+            _shape.Analyze(span, new ShapeAnalysisParams(growth.TrunkChainSegments, species.PadDepth, 0, 0, 0, tree.Genome.Seed,
+                growth.CrownShoulderSlotT > 0.0));
             LastPadCount = _shape.PadCount;
 
             _th0 = (float)_nodes[0].Thickness;
@@ -469,11 +471,17 @@ namespace PocketArbor.DevTools.GrowthPreview
             _rootTips.Clear();
             for (int r = 0; r < count; r++)
             {
-                NebariRoot(seed, r, count, _rootSamples);
-                RecordRootTip(_rootSamples);
+                NebariRoot(seed, r, count, _rootSamples, _forkSamples);
+                if (IsMainRoot(r)) RecordRootTip(_rootSamples);
                 AddRootRibbon(_rootSamples, Bark, BarkDark);
+                if (_forkSamples.Count > 1) AddRootRibbon(_forkSamples, Bark, BarkDark);
             }
         }
+
+        /// <summary>⚑T BALANCE §1.6.4 / TD-071: the first NebariRootMainCount fan slots are main roots (role by index, never by n).</summary>
+        public bool IsMainRoot(int r) => r < _render.NebariRootMainCount;
+
+        readonly List<Vector3> _forkSamples = new List<Vector3>(32);
 
         /// <summary>clamp(round(min + (th0 − th_init) / perRoot), min, max), round half away from zero (ADR-0004 rev.3 §1).</summary>
         public int NebariRootCount(GrowthConfig growth) =>
@@ -487,47 +495,52 @@ namespace PocketArbor.DevTools.GrowthPreview
         readonly List<Vector3> _rootRaw = new List<Vector3>(64);
 
         /// <summary>
-        /// Root r of <paramref name="count"/> as samples (x, y, width), uniform in arc length (⚑Q BALANCE §1.4.2, ADR-0004 rev.4):
-        /// starts on the flare at NebariRootStartHeightRatio·th0, drops at NebariRootDrop (35…55°, hash) to the moss line, lies on the moss
-        /// (centre line ≥ moss line + NebariRootMossClearance) for the first 1 − NebariRootTipBuryRatio of its length, then dives under
-        /// the moss (only the last NebariRootTipBuryRatio is hidden). Width from the base (0.30…0.42·th0) to NebariRootTipRatio of it;
-        /// an upward-only wave of NebariRootWaviness·th0. Fan = slot table × 75° ± 10°; front roots (|fan| ≤ 25°) × 0.6 shorter.
-        /// Long/short and thick/thin alternate by index; everything else hashes (Seed, Id #0, salt) — not the PCG stream.
+        /// Root r of <paramref name="count"/> as samples (x, y, width), uniform in arc length (⚑Q BALANCE §1.4.2, ADR-0004 rev.4/rev.6):
+        /// starts on the #0 arc (main roots at NebariRootStartHeightRatio·th0, ⚑T minor ones lower, 0.35–0.50·th0), drops at NebariRootDrop (35…55°, hash)
+        /// to the moss line, lies on the moss (centre line ≥ moss line + NebariRootMossClearance) for the first 1 − NebariRootTipBuryRatio of its length,
+        /// then dives under the moss. ⚑T §1.6.4: main roots (slots 0–2) 0.32–0.40·th0 thick and 1.2–1.6·th0 long, minor ones 0.16–0.26 / 0.7–1.1; a root of
+        /// thickness ≥ NebariRootForkMinRatio·th0 forks once (<paramref name="fork"/> = the side branch, empty otherwise). Fan = slot table × 75° ± 10°;
+        /// front roots (|fan| ≤ 25°) × 0.6 shorter. Hashes — StableHash (seed, Id #0·32 + r, "ROOT"/"FORK" + k), not the PCG stream.
         /// </summary>
-        public void NebariRoot(uint seed, int r, int count, List<Vector3> samples)
+        public void NebariRoot(uint seed, int r, int count, List<Vector3> samples, List<Vector3> fork = null)
         {
             samples.Clear();
+            fork?.Clear();
             float th0 = _th0;
-            int trunkId = _nodes[0].Id;
+            int key = _nodes[0].Id * 32 + r;
             // ADR-0004 rev.3 §1: fan slot table by index → a new root does not shift the existing ones.
             float[] slots = _render.NebariFanSlots;
-            float fan = slots[r % slots.Length] * _render.NebariFanDeg
-                + _render.NebariFanJitterDeg * (2f * Hash01(seed, trunkId, 101u + (uint)r) - 1f);
+            float fan = slots[r % slots.Length] * _render.NebariFanDeg + _render.NebariFanJitterDeg * (2f * RootHash(seed, key, 0u) - 1f);
             float sin = Mathf.Sin(fan * Mathf.Deg2Rad);
             float dir = fan < 0f ? -1f : 1f;
             bool front = Mathf.Abs(fan) <= _render.NebariFrontRootDeg;
+            bool main = IsMainRoot(r);
 
-            float h = Hash01(seed, trunkId, 211u + (uint)r);
-            bool even = (r & 1) == 0;
-            float lengthFactor = Mathf.Lerp(_render.NebariRootLengthMin, _render.NebariRootLengthMax, even ? 0.6f + 0.4f * h : 0.4f * h);
+            float h = RootHash(seed, key, 1u);
+            float lengthFactor = main
+                ? (r == 2 ? _render.NebariRootLengthMainMax : Mathf.Lerp(_render.NebariRootLengthMainMin, _render.NebariRootLengthMainMax, h))
+                : Mathf.Lerp(_render.NebariRootLengthMinorMin, _render.NebariRootLengthMinorMax, h);
             float length = th0 * lengthFactor * (front ? _render.NebariFrontRootScale : 1f);
-            float hw = Hash01(seed, trunkId, 223u + (uint)r);
-            float baseWidth = th0 * Mathf.Lerp(_render.NebariRootThicknessMin, _render.NebariRootThicknessMax, even ? 0.55f + 0.45f * hw : 0.45f * hw);
+            float hw = RootHash(seed, key, 2u);
+            float thickness = main ? Mathf.Lerp(_render.NebariRootThicknessMainMin, _render.NebariRootThicknessMainMax, hw)
+                : Mathf.Lerp(_render.NebariRootThicknessMinorMin, _render.NebariRootThicknessMinorMax, hw);
+            float baseWidth = th0 * thickness;
             float tipWidth = baseWidth * _render.NebariRootTipRatio;
-            float drop = Mathf.Lerp(_render.NebariRootDropMinDeg, _render.NebariRootDropMaxDeg, Hash01(seed, trunkId, 227u + (uint)r)) * Mathf.Deg2Rad;
+            float drop = Mathf.Lerp(_render.NebariRootDropMinDeg, _render.NebariRootDropMaxDeg, RootHash(seed, key, 3u)) * Mathf.Deg2Rad;
             float endDrop = _render.NebariRootEndDropDeg * Mathf.Deg2Rad;
             float buryDrop = _render.NebariRootBuryDropDeg * Mathf.Deg2Rad;
-            float phase = Hash01(seed, trunkId, 229u + (uint)r) * Mathf.PI * 2f;
+            float phase = RootHash(seed, key, 4u) * Mathf.PI * 2f;
             float bury = Mathf.Clamp01(_render.NebariRootTipBuryRatio);
+            float startRatio = main ? _render.NebariRootStartHeightRatio
+                : Mathf.Lerp(_render.NebariRootMinorStartMin, _render.NebariRootMinorStartMax, RootHash(seed, key, 5u));
 
             // Projected horizontal reach: roots facing the viewer show less of their length sideways.
             float reach = length * Mathf.Max(0.35f, Mathf.Abs(sin));
             float moss = _render.MossLineY;
-            // ⚑R BALANCE §1.5.5 / ADR-0004 rev.5: the root starts on the #0 arc at s0 = NebariRootStartHeightRatio·th0, its centre line inside the
-            // silhouette at d0 = (0.5·w_flare − 0.5·t_root)·max(|sin a|, 0.35) from the axis (the outer edge on the trunk contour), heading down
-            // the #0 axis deflected outwards by 90° − NebariRootStartAngleDeg (along the trunk surface), then the chord of segment 1 drops at
-            // NebariRootDrop to the moss line and eases into the shelf.
-            float tStart = TrunkParamAtArc(_render.NebariRootStartHeightRatio * th0);
+            // ⚑R BALANCE §1.5.5 / ADR-0004 rev.5: the root starts on the #0 arc, its centre line inside the silhouette at
+            // d0 = (0.5·w_flare − 0.5·t_root)·max(|sin a|, 0.35) from the axis, heading down the #0 axis deflected outwards by 90° − NebariRootStartAngleDeg,
+            // then the chord of segment 1 drops at NebariRootDrop to the moss line and eases into the shelf.
+            float tStart = TrunkParamAtArc(startRatio * th0);
             Vector2 axisPoint = Eval(0, tStart);
             Vector2 axisTangent = Eval(0, Mathf.Min(1f, tStart + 0.01f)) - Eval(0, Mathf.Max(0f, tStart - 0.01f));
             axisTangent = axisTangent.sqrMagnitude > 1e-10f ? axisTangent.normalized : Vector2.up;
@@ -547,6 +560,10 @@ namespace PocketArbor.DevTools.GrowthPreview
             var t2 = new Vector2(dir * Mathf.Cos(endDrop), -Mathf.Sin(endDrop));
             var t3 = new Vector2(dir * Mathf.Cos(buryDrop), -Mathf.Sin(buryDrop));
 
+            // ⚑T §1.6.4 fork: on the shelf, at t_f of the arc; the root continues × ForkMainScale after it (smooth over 0.08 of the length).
+            bool forks = thickness >= _render.NebariRootForkMinRatio;
+            float tFork = Mathf.Lerp(_render.NebariRootForkTMin, _render.NebariRootForkTMax, ForkHash(seed, key, 0u));
+
             // Dense polyline of the three C1 Hermite segments, then resampled uniformly in arc length.
             const int perSegment = 12;
             _rootRaw.Clear();
@@ -558,6 +575,8 @@ namespace PocketArbor.DevTools.GrowthPreview
             const int resampled = 24;
             int j = 1;
             float walked = 0f;
+            float forkWidth = 0f;
+            Vector2 forkPoint = Vector2.zero;
             for (int k = 0; k <= resampled; k++)
             {
                 float target = total * k / resampled;
@@ -573,9 +592,46 @@ namespace PocketArbor.DevTools.GrowthPreview
                 float wave = _render.NebariRootWaviness * th0 * (0.5f + 0.5f * Mathf.Sin(2f * Mathf.PI * t + phase)) * Mathf.Sin(Mathf.PI * t)
                     * (1f - Mathf.SmoothStep(1f - bury - 0.1f, 1f - bury, t));
                 point.y += wave;
-                samples.Add(new Vector3(point.x, point.y, baseWidth * Mathf.Lerp(1f, _render.NebariRootTipRatio, t)));
+                float width = baseWidth * Mathf.Lerp(1f, _render.NebariRootTipRatio, t);
+                if (forks)
+                {
+                    if (t <= tFork)
+                    {
+                        forkWidth = width;
+                        forkPoint = point;
+                    }
+                    width *= Mathf.Lerp(1f, _render.NebariRootForkMainScale, Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(tFork, tFork + 0.08f, t)));
+                }
+                samples.Add(new Vector3(point.x, point.y, width));
+            }
+            if (!forks || fork == null) return;
+
+            // Side branch: leaves the fork point up the receding moss at the fork angle, eases onto the shelf, its last quarter dives under the moss.
+            float angle = Mathf.Lerp(_render.NebariRootForkAngleMinDeg, _render.NebariRootForkAngleMaxDeg, ForkHash(seed, key, 1u)) * Mathf.Deg2Rad;
+            float branchReach = Mathf.Max(0.3f * th0, (1f - tFork) * reach * 0.9f);
+            float rise = branchReach * Mathf.Tan(angle) * 0.35f;
+            float bw = forkWidth * _render.NebariRootForkSideScale;
+            var b0 = forkPoint;
+            var bt0 = new Vector2(dir * Mathf.Cos(angle), Mathf.Sin(angle));
+            var b1 = new Vector2(b0.x + dir * 0.75f * branchReach, b0.y + rise);
+            var bt1 = new Vector2(dir, 0f);
+            var b2 = new Vector2(b0.x + dir * branchReach, moss - _render.NebariRootEndDepth - 0.5f * bw * _render.NebariRootTipRatio);
+            _rootRaw.Clear();
+            AppendHermite(b0, bt0, b1, bt1, perSegment, true);
+            AppendHermite(b1, bt1, b2, t3, perSegment, false);
+            const int branchSamples = 16;
+            for (int k = 0; k <= branchSamples; k++)
+            {
+                float f = (_rootRaw.Count - 1) * k / (float)branchSamples;
+                int a = Mathf.Min(_rootRaw.Count - 2, Mathf.FloorToInt(f));
+                Vector2 point = Vector2.Lerp(_rootRaw[a], _rootRaw[a + 1], f - a);
+                fork.Add(new Vector3(point.x, point.y, bw * Mathf.Lerp(1f, _render.NebariRootTipRatio, k / (float)branchSamples)));
             }
         }
+
+        static float RootHash(uint seed, int key, uint k) => (float)PocketArbor.Domain.Random.StableHash.Hash01(seed, key, PocketArbor.Domain.Random.StableHash.RootSalt + k);
+
+        static float ForkHash(uint seed, int key, uint k) => (float)PocketArbor.Domain.Random.StableHash.Hash01(seed, key, PocketArbor.Domain.Random.StableHash.ForkSalt + k);
 
         void AppendHermite(Vector2 a, Vector2 ta, Vector2 b, Vector2 tb, int steps, bool first)
         {

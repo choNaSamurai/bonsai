@@ -172,8 +172,14 @@ namespace PocketArbor.Domain.Tests.Growth
                 Assert.AreEqual((r.Crown[i] || r.Order[i] >= 1) && !r.InPad[i], shape.IsInterior(i), at + " interior");
                 Assert.AreEqual(r.PadId[i], shape.PadId(i), at + " pad id");
                 Assert.AreEqual(r.PadSize[i], shape.PadSize(i), at + " pad size");
-                bool primary = nodes[i].BranchSide != 0 && r.Chain[nodes[i].ParentIndex];
-                Assert.AreEqual(primary, shape.IsPrimary(i), at + " primary");
+                // ⚑T BALANCE §1.6.2(б) (conscious update): slot 0 of the chain top is the crown shoulder, not a primary (when the analysis has the
+                // shoulder on and the genome seed).
+                bool chainLateral = nodes[i].BranchSide != 0 && r.Chain[nodes[i].ParentIndex];
+                int pk = chainLateral ? nodes[nodes[i].ParentIndex].Depth : -1;
+                bool shoulder = chainLateral && shape.CrownShoulder && pk == shape.TrunkChainSegments - 1
+                    && TreeShapeAnalysis.ChainLateralSlot(nodes[i].BranchSide, pk, shape.Seed) == 0;
+                Assert.AreEqual(shoulder, shape.IsCrownShoulder(i), at + " shoulder");
+                Assert.AreEqual(chainLateral && !shoulder, shape.IsPrimary(i), at + " primary");
                 if (r.Chain[i]) chain++;
                 if (r.Chain[i] && shape.ChildCount(i) > 0) Assert.IsFalse(shape.IsLeafy(i), at + ": trunk chain with children is never leafy");
             }

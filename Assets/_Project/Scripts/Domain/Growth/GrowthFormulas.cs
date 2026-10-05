@@ -152,5 +152,23 @@ namespace PocketArbor.Domain.Growth
         public static double SignNonZero(double value) => value < 0.0 ? -1.0 : 1.0;
 
         public const double DegToRad = Math.PI / 180.0;
+
+        /// <summary>
+        /// ⚑T BALANCE §1.6.1(б) group multiplier B_g of a balanced tier group with raw selection mass <paramref name="groupMass"/> = R_g,
+        /// total mass <paramref name="totalMass"/> = R, <paramref name="nodes"/> = N_g and <paramref name="target"/> = T_g:
+        /// N &lt; T — max(R_g, TierHungryShare·d·R) / R_g, d = min(1, TierDeficitGain·(T − N)/T); T ≤ N &lt; TierCapRatio·T — TierFedFactor;
+        /// N ≥ TierCapRatio·T — TierCapFactor. No target (T ≤ 0) or R_g ≤ 0 → 1. Finite for every input.
+        /// </summary>
+        public static double TierBalanceFactor(double groupMass, double totalMass, int nodes, int target, GrowthConfig config)
+        {
+            if (target <= 0 || !(groupMass > 0.0) || double.IsInfinity(groupMass)) return 1.0;
+            if (nodes < target)
+            {
+                double deficit = Math.Min(1.0, Clamp(config.TierDeficitGain, 0.0, double.MaxValue) * (target - nodes) / target);
+                double floor = Clamp(config.TierHungryShare, 0.0, 1.0) * deficit * (totalMass > 0.0 && !double.IsInfinity(totalMass) ? totalMass : 0.0);
+                return (floor > groupMass ? floor : groupMass) / groupMass;
+            }
+            return nodes < config.TierCapRatio * target ? Clamp(config.TierFedFactor, 0.0, double.MaxValue) : Clamp(config.TierCapFactor, 0.0, double.MaxValue);
+        }
     }
 }

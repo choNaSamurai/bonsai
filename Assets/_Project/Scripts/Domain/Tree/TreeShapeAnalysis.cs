@@ -32,6 +32,17 @@ namespace PocketArbor.Domain.Tree
         readonly int[] _axisRemain = new int[TreeGraph.Capacity];
         readonly int[] _backBudDist = new int[TreeGraph.Capacity];
         readonly bool[] _inPad = new bool[TreeGraph.Capacity];
+        // ⚑T BALANCE §1.6.1(а) tier groups, the crown shoulder and the lateral slots of chain nodes (by side).
+        readonly TierGroup[] _group = new TierGroup[TreeGraph.Capacity];
+        readonly bool[] _shoulder = new bool[TreeGraph.Capacity];
+        readonly bool[] _slot0 = new bool[TreeGraph.Capacity];
+        readonly bool[] _slot1 = new bool[TreeGraph.Capacity];
+        readonly int[] _groupCount = new int[TierGroups.Count];
+        readonly int[] _depth = new int[TreeGraph.Capacity];
+
+        /// <summary>Seed and shoulder flag of the last analysis (⚑T §1.6.1 а).</summary>
+        public uint Seed { get; private set; }
+        public bool CrownShoulder { get; private set; }
 
         /// <summary>Number of analysed nodes.</summary>
         public int Count { get; private set; }
@@ -47,6 +58,10 @@ namespace PocketArbor.Domain.Tree
 
         /// <summary>BALANCE §1.2.0: TierPhase = (randomSeed &amp; 1) == 0 ? +1 : −1 (genome bit, no RNG).</summary>
         public static int TierPhase(uint seed) => (seed & 1u) == 0u ? 1 : -1;
+
+        /// <summary>⚑T BALANCE §1.6.1(а) / TD-065: slot of a lateral with <paramref name="branchSide"/> on trunk-chain node <paramref name="k"/> —
+        /// 1 on s_k = TierPhase·(−1)^k, else 0 (one rule for the analysis, ShootBuilder and the styler).</summary>
+        public static int ChainLateralSlot(int branchSide, int k, uint seed) => branchSide == TierPhase(seed) * ((k & 1) == 0 ? 1 : -1) ? 1 : 0;
 
         /// <summary>ord(i): number of lateral branchings on the path from the root (O(depth), allocation-free).</summary>
         public static int OrderOf(ReadOnlySpan<NodeData> nodes, int index)
@@ -70,7 +85,8 @@ namespace PocketArbor.Domain.Tree
 
         /// <summary>Parameters of <paramref name="tree"/> on its current GrowthDayIndex.</summary>
         public static ShapeAnalysisParams Params(TreeGraph tree, GrowthConfig config, SpeciesConfig species) =>
-            new ShapeAnalysisParams(config.TrunkChainSegments, species.PadDepth, tree.Growth.GrowthDayIndex, config.BackBudDays, config.BackBudRadiusEdges);
+            new ShapeAnalysisParams(config.TrunkChainSegments, species.PadDepth, tree.Growth.GrowthDayIndex, config.BackBudDays, config.BackBudRadiusEdges,
+                tree.Genome.Seed, config.CrownShoulderSlotT > 0.0);
 
         /// <summary>Analysis without back-budding context: <see cref="BackBudDist"/> is <see cref="NoFreshCut"/> everywhere.</summary>
         public void Analyze(ReadOnlySpan<NodeData> nodes, int trunkChainSegments, int padDepth) =>
@@ -87,6 +103,9 @@ namespace PocketArbor.Domain.Tree
             Count = count;
             TrunkChainSegments = trunkChainSegments;
             PadDepth = padDepth;
+            Seed = p.Seed;
+            CrownShoulder = p.CrownShoulder;
+            for (int g = 0; g < TierGroups.Count; g++) _groupCount[g] = 0;
 
             for (int i = 0; i < count; i++)
             {
@@ -95,6 +114,8 @@ namespace PocketArbor.Domain.Tree
                 _tipDistance[i] = NoChildren;
                 _backBudDist[i] = NoFreshCut;
                 _padSizeByRoot[i] = 0;
+                _slot0[i] = false;
+                _slot1[i] = false;
             }
 
             // Forward pass (parents precede children): order, roles, child counts.
@@ -103,6 +124,7 @@ namespace PocketArbor.Domain.Tree
             {
                 int parent = nodes[i].ParentIndex;
                 bool lateral = nodes[i].BranchSide != 0;
+                _depth[i] = nodes[i].Depth;
                 if (parent < 0)
                 {
                     _order[i] = 0;
@@ -117,9 +139,32 @@ namespace PocketArbor.Domain.Tree
                 bool axis = _order[i] == 0;
                 _trunkChain[i] = axis && nodes[i].Depth < trunkChainSegments;
                 _crownAxis[i] = axis && !_trunkChain[i];
-                _primary[i] = lateral && parent >= 0 && _trunkChain[parent];
-                _dome[i] = _crownAxis[i] || (parent >= 0 && _dome[parent]);
+                bool chainLateral = lateral && parent >= 0 && _trunkChain[parent];
+                // ⚑T §1.6.1(а): the slot of a chain lateral by its side — slot 1 on s_k = TierPhase·(−1)^k, slot 0 on −s_k (§1.3.2; the same as the
+                // AttachT midpoint for every PA-102R tree, exact also for the shoulder at AttachT 0.95).
+                int k = chainLateral ? nodes[parent].Depth : -1;
+                bool slot1 = chainLateral && ChainLateralSlot(nodes[i].BranchSide, k, p.Seed) == 1;
+                if (chainLateral)
+                {
+                    if (slot1) _slot1[parent] = true;
+                    else _slot0[parent] = true;
+                }
+                _shoulder[i] = chainLateral && !slot1 && p.CrownShoulder && k == trunkChainSegments - 1;
+                _primary[i] = chainLateral && !_shoulder[i];
+                _dome[i] = _crownAxis[i] || _shoulder[i] || (parent >= 0 && _dome[parent]);
                 if (_trunkChain[i]) chainLength++;
+
+                TierGroup group;
+                if (_trunkChain[i]) group = TierGroup.Chain;
+                else if (_dome[i]) group = TierGroup.Dome;
+                else if (chainLateral)
+                {
+                    if (k == 0) group = nodes[i].Id == TreeFactory.SaplingTwigId ? TierGroup.Other : slot1 ? TierGroup.T1 : TierGroup.T0;
+                    else group = slot1 && k + 1 <= (int)TierGroup.T5 ? (TierGroup)(k + 1) : TierGroup.Other;
+                }
+                else group = parent >= 0 ? _group[parent] : TierGroup.Other;
+                _group[i] = group;
+                _groupCount[(int)group]++;
             }
             TrunkChainLength = chainLength;
 
@@ -169,6 +214,8 @@ namespace PocketArbor.Domain.Tree
             for (int i = 0; i < count; i++) _padSize[i] = _padId[i] >= 0 ? _padSizeByRoot[_padId[i]] : 0;
         }
 
+        int DepthOf(int index) => _depth[index];
+
         /// <summary>ord(i) — lateral branchings from the root.</summary>
         public int Order(int index) => _order[index];
 
@@ -184,8 +231,40 @@ namespace PocketArbor.Domain.Tree
         /// <summary>⚑Q BALANCE §1.4.4: the dome subtree — a crown-axis node or any descendant of one (its laterals and all they bear).</summary>
         public bool InDome(int index) => _dome[index];
 
-        /// <summary>Lateral child of a trunk-chain node (a tier).</summary>
+        /// <summary>Lateral child of a trunk-chain node (a tier) — ⚑T §1.6.2(б) except the crown shoulder.</summary>
         public bool IsPrimary(int index) => _primary[index];
+
+        /// <summary>⚑T §1.6.2(б): slot 0 of the chain top (when <see cref="ShapeAnalysisParams.CrownShoulder"/>) — a dome lateral (#7), not a tier.</summary>
+        public bool IsCrownShoulder(int index) => _shoulder[index];
+
+        /// <summary>⚑T §1.6.1(а) tier group of the node (membership).</summary>
+        public TierGroup GroupOf(int index) => _group[index];
+
+        /// <summary>⚑T §1.6.1(а) N_g: live nodes of group <paramref name="group"/> (all statuses).</summary>
+        public int GroupCount(TierGroup group) => _groupCount[(int)group];
+
+        /// <summary>Lateral slot 0 / slot 1 of trunk-chain node <paramref name="index"/> is taken (by side, §1.3.2); false for other nodes.</summary>
+        public bool ChainSlot0Taken(int index) => _slot0[index];
+        public bool ChainSlot1Taken(int index) => _slot1[index];
+
+        /// <summary>
+        /// ⚑T §1.6.1(а) group a candidate's next shoot is weighed in: a trunk-chain node — the group of the tier it creates (free slot 1 of node k →
+        /// t(k+1), #0 → t1; then free slot 0 of #0 → t0, of the chain top → the dome when the shoulder is on); <see cref="TierGroup.Other"/>
+        /// when it creates its apical child (<paramref name="createsApical"/>) or an intermediate tier; any other node — its membership group.
+        /// </summary>
+        public TierGroup WeightGroup(int index, bool createsApical)
+        {
+            if (!_trunkChain[index]) return _group[index];
+            if (createsApical) return TierGroup.Other;
+            int k = DepthOf(index);
+            if (!_slot1[index]) return k == 0 ? TierGroup.T1 : k + 1 <= (int)TierGroup.T5 ? (TierGroup)(k + 1) : TierGroup.Other;
+            if (!_slot0[index])
+            {
+                if (k == 0) return TierGroup.T0;
+                if (CrownShoulder && k == TrunkChainSegments - 1) return TierGroup.Dome;
+            }
+            return TierGroup.Other;
+        }
 
         /// <summary>TipDistance (§1.2.0): 0 without children, else 1 + min over children. Not used for foliage/roles since §1.3.4.</summary>
         public int TipDistance(int index) => _tipDistance[index];

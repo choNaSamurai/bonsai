@@ -112,15 +112,19 @@ namespace PocketArbor.DevTools.Tests
         }
 
         [Test]
-        public void BuildTextured_Pads_SortedBottomUp()
+        public void BuildTextured_Pads_SortedTopDown()
         {
             foreach (SpeciesId species in new[] { SpeciesId.Kuromatsu, SpeciesId.Momiji, SpeciesId.Yamazakura })
             {
                 Build(species, 80, true, out TreePreviewMeshBuilder builder, out _, out _, out Mesh pads);
                 IReadOnlyList<float> keys = builder.LastPadOrderKeys;
                 Assert.Greater(keys.Count, 3, species + " pads");
-                for (int k = 1; k < keys.Count; k++) Assert.GreaterOrEqual(keys[k], keys[k - 1], species + " pad " + k);
-                Assert.AreEqual(builder.LastPuffs.Count * 2 * 4, pads.vertexCount, "shadow + puff quad per puff");
+                // ⚑T BALANCE §1.6.5(в) / TD-070 (conscious update): pads are emitted top-down (was bottom-up, apex last).
+                for (int k = 1; k < keys.Count; k++) Assert.LessOrEqual(keys[k], keys[k - 1], species + " pad " + k);
+                // Shadow + puff quad per emitted sprite; thinned sprites (§1.6.5 б) and covered underlays (§1.6.5 в) are not emitted.
+                Assert.AreEqual(0, pads.vertexCount % 4);
+                Assert.LessOrEqual(pads.vertexCount, builder.LastPuffs.Count * 2 * 4, "at most shadow + puff quad per puff record");
+                Assert.GreaterOrEqual(pads.vertexCount, (builder.LastPuffs.Count - builder.LastPuffsThinned) * 4, "every kept puff is drawn");
             }
         }
 

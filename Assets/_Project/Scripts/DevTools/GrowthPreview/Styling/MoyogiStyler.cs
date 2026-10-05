@@ -23,6 +23,8 @@ namespace PocketArbor.DevTools.GrowthPreview
             S7Dome = 7,
             /// <summary>⚑R BALANCE §1.5.3(в): «air between tiers» of one side (StylePadGapUnits, StylePadGapCutsPerPass).</summary>
             S8PadGap = 8,
+            /// <summary>⚑T BALANCE §1.6.3(а): «pad ceiling» of a tier group (StyleTierCapRatio).</summary>
+            S10PadCeiling = 10,
         }
 
         readonly TreeShapeAnalysis _shape = new TreeShapeAnalysis();
@@ -31,7 +33,11 @@ namespace PocketArbor.DevTools.GrowthPreview
         int[] _axisStart = new int[TreeGraph.Capacity];
 
         /// <summary>Cuts made per rule by the last <see cref="PruneToStyle"/> (index = (int)Rule).</summary>
-        public readonly int[] LastCuts = new int[9];
+        public readonly int[] LastCuts = new int[11];
+
+        /// <summary>⚑T T14: groups (t0…t5, dome) S10 had to trim on the last pass, and those of them still above T_g afterwards (nothing cuttable).</summary>
+        public int LastCeilingGroups { get; private set; }
+        public int LastCeilingGroupsOver { get; private set; }
 
         /// <summary>AC19 statistics of the last S8 pass: same-side tier pairs, pairs with gap ≥ StylePadGapUnits or the cut limit used,
         /// cuts that hit the first node of a primary (must stay 0).</summary>
@@ -50,7 +56,7 @@ namespace PocketArbor.DevTools.GrowthPreview
         readonly List<int> _sideTiers = new List<int>();
         readonly Dictionary<int, int> _pairCuts = new Dictionary<int, int>();
 
-        /// <summary>Runs S1–S8. Returns the number of successful cuts.</summary>
+        /// <summary>Runs S1–S8 and ⚑T S10. Returns the number of successful cuts.</summary>
         public int PruneToStyle(TreeGraph tree, GrowthConfig config, SpeciesConfig species, StyleConfig style)
         {
             for (int r = 0; r < LastCuts.Length; r++) LastCuts[r] = 0;
@@ -64,7 +70,63 @@ namespace PocketArbor.DevTools.GrowthPreview
             }
             int s8 = PadGap(tree, config, species, style);
             LastCuts[(int)Rule.S8PadGap] = s8;
-            return cuts + s8;
+            int s10 = PadCeiling(tree, config, species, style);
+            LastCuts[(int)Rule.S10PadCeiling] = s10;
+            return cuts + s8 + s10;
+        }
+
+        /// <summary>
+        /// ⚑T BALANCE §1.6.3(а) S10: for every group g ∈ {t0…t5, dome} with N_g &gt; ceil(StyleTierCapRatio·T_g), cut end nodes of the group (leaves, one
+        /// node per cut) — the highest tip (C1 preview geometry) among ord ≥ 2 first, then the newest (largest Id) — until N_g ≤ T_g. Never the first
+        /// node of a primary, the crown shoulder or a crown-axis node.
+        /// </summary>
+        int PadCeiling(TreeGraph tree, GrowthConfig config, SpeciesConfig species, StyleConfig style)
+        {
+            LastCeilingGroups = LastCeilingGroupsOver = 0;
+            if (!(style.StyleTierCapRatio > 0.0)) return 0;
+            ShapeParams shape = ShapeParams.Resolve(config, species);
+            int total = 0;
+            for (int g = 0; g <= (int)TierGroup.Dome; g++)
+            {
+                var group = (TierGroup)g;
+                int target = shape.TierTarget(group);
+                if (target <= 0) continue;
+                _shape.Analyze(tree, config, species);
+                if (_shape.GroupCount(group) <= (int)System.Math.Ceiling(style.StyleTierCapRatio * target - 1e-9)) continue;
+                LastCeilingGroups++;
+                for (int guard = 0; guard < TreeGraph.Capacity && _shape.GroupCount(group) > target; guard++)
+                {
+                    _geometry.Build(tree.Nodes, _shape, style.CurvatureOffsetRatio);
+                    int victim = CeilingTarget(tree.Nodes, group);
+                    if (victim < 0) break;
+                    if (!TreePruning.Prune(tree, tree.Nodes[victim].Id, config).Succeeded) break;
+                    total++;
+                    _shape.Analyze(tree, config, species);
+                }
+                if (_shape.GroupCount(group) > target) LastCeilingGroupsOver++;
+            }
+            return total;
+        }
+
+        int CeilingTarget(System.ReadOnlySpan<NodeData> nodes, TierGroup group)
+        {
+            int best = -1;
+            bool bestHigh = false;
+            for (int i = 1; i < nodes.Length; i++)
+            {
+                if (_shape.GroupOf(i) != group || _shape.ChildCount(i) > 0) continue;
+                if (_shape.IsPrimary(i) || _shape.IsCrownShoulder(i) || _shape.Order(i) == 0) continue;
+                bool high = _shape.Order(i) >= 2;
+                if (best < 0 || (high && !bestHigh))
+                {
+                    best = i;
+                    bestHigh = high;
+                    continue;
+                }
+                if (high != bestHigh) continue;
+                if (high ? _geometry.TipY(i) > _geometry.TipY(best) : nodes[i].Id > nodes[best].Id) best = i;
+            }
+            return best;
         }
 
         /// <summary>
@@ -92,7 +154,7 @@ namespace PocketArbor.DevTools.GrowthPreview
                     {
                         int lower = _sideTiers[k];
                         int upper = k + 1 < _sideTiers.Count ? _sideTiers[k + 1] : -1;
-                        double top = upper >= 0 ? PadTipExtreme(tree.Nodes, upper, false) : DomeTipMin(tree.Nodes);
+                        double top = upper >= 0 ? PadTipExtreme(tree.Nodes, upper, false) : DomeTipMin(tree.Nodes, side);
                         double low = PadTipExtreme(tree.Nodes, lower, true);
                         if (double.IsNaN(top) || double.IsNaN(low) || top - low >= style.StylePadGapUnits) continue;
                         int key = tree.Nodes[lower].Id;
@@ -122,7 +184,7 @@ namespace PocketArbor.DevTools.GrowthPreview
                 {
                     int lower = _sideTiers[k];
                     int upper = k + 1 < _sideTiers.Count ? _sideTiers[k + 1] : -1;
-                    double top = upper >= 0 ? PadTipExtreme(tree.Nodes, upper, false) : DomeTipMin(tree.Nodes);
+                    double top = upper >= 0 ? PadTipExtreme(tree.Nodes, upper, false) : DomeTipMin(tree.Nodes, side);
                     double low = PadTipExtreme(tree.Nodes, lower, true);
                     if (double.IsNaN(top) || double.IsNaN(low)) continue;
                     LastGapPairs++;
@@ -186,16 +248,28 @@ namespace PocketArbor.DevTools.GrowthPreview
             return best;
         }
 
-        double DomeTipMin(System.ReadOnlySpan<NodeData> nodes)
+        /// <summary>Min tip Y of the dome's InPad nodes on side <paramref name="side"/>: ⚑T §1.6.2 — dome lateral axes (laterals of the crown axis and the
+        /// crown shoulder) of the other side are skipped (the shoulder stands opposite #6 and must not cut it), the crown axis itself counts.</summary>
+        double DomeTipMin(System.ReadOnlySpan<NodeData> nodes, int side)
         {
             double best = double.NaN;
             for (int i = 0; i < nodes.Length; i++)
             {
                 if (!_shape.InDome(i) || !_shape.InPad(i)) continue;
+                int axisSide = DomeAxisSide(nodes, i);
+                if (axisSide != 0 && axisSide != side) continue;
                 double y = _geometry.TipY(i);
                 if (double.IsNaN(best) || y < best) best = y;
             }
             return best;
+        }
+
+        /// <summary>BranchSide of the dome lateral axis root holding node <paramref name="i"/> (the topmost lateral below it); 0 on the crown axis.</summary>
+        static int DomeAxisSide(System.ReadOnlySpan<NodeData> nodes, int i)
+        {
+            int side = 0;
+            for (int j = i; j > 0; j = nodes[j].ParentIndex) if (nodes[j].BranchSide != 0) side = nodes[j].BranchSide;
+            return side;
         }
 
         /// <summary>The InPad node of the lower pad with the highest tip among ord ≥ 2; else the end of the primary axis (never its first node).</summary>
@@ -245,8 +319,9 @@ namespace PocketArbor.DevTools.GrowthPreview
                         cut = _shape.IsCrownAxis(i) && n.Depth - config.TrunkChainSegments + 1 > style.StyleCrownAxisMax;
                         break;
                     case Rule.S3IntermediateTiers:
-                        cut = !style.StyleKeepIntermediateTiers && _shape.IsPrimary(i) && nodes[parent].Depth >= 1
-                            && IsSlot0(n, parent, config) && HasGrownBendTier(nodes, parent, config);
+                        // ⚑T §1.6.2(б): the crown shoulder is not an intermediate tier (StyleKeepCrownShoulder); slots by side (§1.3.2).
+                        cut = !style.StyleKeepIntermediateTiers && (_shape.IsPrimary(i) || (_shape.IsCrownShoulder(i) && !style.StyleKeepCrownShoulder))
+                            && nodes[parent].Depth >= 1 && IsSlot0(n, nodes, parent, tree.Genome.Seed) && HasGrownBendTier(nodes, parent, tree.Genome.Seed);
                         break;
                     case Rule.S4BranchLegs:
                         cut = startParent >= 0 && _shape.IsPrimary(start) && _axisPos[i] > species.PadDepth + style.StyleBranchAxisExtra;
@@ -261,7 +336,8 @@ namespace PocketArbor.DevTools.GrowthPreview
                         cut = style.StyleCutInteriorShoots && n.BranchSide != 0 && _shape.IsInterior(parent);
                         break;
                     case Rule.S7Dome:
-                        cut = startParent >= 0 && _shape.IsCrownAxis(startParent) && _axisPos[i] > style.StyleDomeLateralMax;
+                        // ⚑T §1.6.2(б): the crown shoulder's axis is limited like the laterals of the crown axis.
+                        cut = startParent >= 0 && (_shape.IsCrownAxis(startParent) || _shape.IsCrownShoulder(start)) && _axisPos[i] > style.StyleDomeLateralMax;
                         break;
                 }
                 // Cut only the first offending node of a subtree (its descendants go with it).
@@ -269,18 +345,17 @@ namespace PocketArbor.DevTools.GrowthPreview
             }
         }
 
-        static bool IsSlot0(in NodeData lateral, int parent, GrowthConfig config)
-        {
-            double boundary = parent == 0 ? 0.5 * (config.TrunkBaseSlotT0 + config.TrunkBaseSlotT1) : 0.5 * (config.LateralSlotT0 + config.LateralSlotT1);
-            return lateral.AttachT < boundary;
-        }
+        /// <summary>⚑T §1.6.1(а): slot 0 of a chain lateral = side −s_k (§1.3.2) — the same as the AttachT midpoint for PA-102R trees, exact for the
+        /// crown shoulder (AttachT 0.95).</summary>
+        static bool IsSlot0(in NodeData lateral, System.ReadOnlySpan<NodeData> nodes, int parent, uint seed) =>
+            lateral.BranchSide != TreeShapeAnalysis.TierPhase(seed) * ((nodes[parent].Depth & 1) == 0 ? 1 : -1);
 
-        static bool HasGrownBendTier(System.ReadOnlySpan<NodeData> nodes, int parent, GrowthConfig config)
+        static bool HasGrownBendTier(System.ReadOnlySpan<NodeData> nodes, int parent, uint seed)
         {
             for (int j = parent + 1; j < nodes.Length; j++)
             {
                 if (nodes[j].ParentIndex != parent || nodes[j].BranchSide == 0) continue;
-                if (!IsSlot0(nodes[j], parent, config) && nodes[j].Status != NodeStatus.Bud) return true;
+                if (!IsSlot0(nodes[j], nodes, parent, seed) && nodes[j].Status != NodeStatus.Bud) return true;
             }
             return false;
         }

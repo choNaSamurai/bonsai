@@ -21,7 +21,7 @@ namespace PocketArbor.DevTools.GrowthPreview
     /// <c>-executeMethod PocketArbor.DevTools.GrowthPreview.PreviewMetricsHarness.RunBatch -metricsOut &lt;dir&gt; [-seeds 30] [-noImages]
     /// [-cfg Field=v,…] [-only Momiji]</c> (Metal, without -nographics). Dev-only: allocations are fine.
     /// </summary>
-    public static class PreviewMetricsHarness
+    public static partial class PreviewMetricsHarness
     {
         public const int FrameWidth = 768;
         public const int FrameHeight = 1376;
@@ -33,7 +33,7 @@ namespace PocketArbor.DevTools.GrowthPreview
 
         static readonly int[] StyledDays = { 20, 40, 60, 80, 90, 100, 110, 120 };
         static readonly int[] AcDays = { 80, 90, 100, 110, 120 };
-        static readonly int[] WildDays = { 20, 80 };
+        static readonly int[] WildDays = { 20, 80, 120 }; // ⚑T T16: Wild D80 / D120
         static readonly SpeciesId[] AllSpecies = { SpeciesId.Momiji, SpeciesId.Kuromatsu, SpeciesId.Yamazakura };
         static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
 
@@ -59,7 +59,7 @@ namespace PocketArbor.DevTools.GrowthPreview
         const float BendMinArc = 8f;
 
         /// <summary>One measured frame.</summary>
-        public sealed class Row
+        public sealed partial class Row
         {
             public SpeciesId Species;
             public bool Styled;
@@ -129,6 +129,7 @@ namespace PocketArbor.DevTools.GrowthPreview
                 int seeds = int.TryParse(Arg(args, "-seeds"), out int n) ? n : 30;
                 bool images = Array.IndexOf(args, "-noImages") < 0;
                 Overrides = Arg(args, "-cfg");
+                WildOnly = Array.IndexOf(args, "-wildOnly") >= 0;
                 string only = Arg(args, "-only");
                 Run(outDir, seeds, images, only);
             }
@@ -169,6 +170,7 @@ namespace PocketArbor.DevTools.GrowthPreview
                 controller.SetSpecies(species);
                 foreach (bool styled in new[] { true, false })
                 {
+                    if (WildOnly && styled) continue;
                     controller.SetStyled(styled);
                     for (int s = 0; s <= seeds; s++)
                     {
@@ -189,13 +191,15 @@ namespace PocketArbor.DevTools.GrowthPreview
                             if (images && s == 0 && styled && (day == 80 || day == 120))
                                 SaveOverlay(Path.Combine(outDir, "overlay_" + species + "_d" + day + ".png"), ours, reference, row.Mirror);
                         }
+                        // Batch runs render thousands of 768×1376 frames: keep the Editor heap flat (16 GB machine, one Unity at a time).
+                        GC.Collect();
                     }
                 }
             }
             Components = null;
 
             // AC20: styles (Momiji Styled D80, 30 seeds + fixture; model/mesh metrics only).
-            if (only == null || only == "Momiji")
+            if ((only == null || only == "Momiji") && !WildOnly)
             {
                 controller.SetSpecies(SpeciesId.Momiji);
                 controller.SetStyled(true);
@@ -226,7 +230,8 @@ namespace PocketArbor.DevTools.GrowthPreview
             File.WriteAllText(Path.Combine(outDir, "summary.txt"), summary);
             Debug.Log("[PA-102R metrics]\n" + summary);
 
-            if (images) CaptureImages(controller, camera, outDir);
+            if (images && !WildOnly) CaptureImages(controller, camera, outDir);
+            if (images) CaptureImagesT(controller, camera, outDir);
             return rows;
         }
 
@@ -253,6 +258,17 @@ namespace PocketArbor.DevTools.GrowthPreview
                     else FoliageConfig.SideMinSpanOverride = float.Parse(kv[1], Inv);
                     continue;
                 }
+                if (typeof(FoliageConfig).GetField(kv[0]) is System.Reflection.FieldInfo ff && !ff.IsStatic)
+                {
+                    FoliageConfig.FieldOverrides[kv[0]] = float.Parse(kv[1], Inv);
+                    continue;
+                }
+                string rf = kv[0].IndexOf('.') > 0 ? kv[0].Substring(kv[0].IndexOf('.') + 1) : kv[0];
+                if (typeof(SpeciesRenderProfile).GetField(rf) != null)
+                {
+                    SpeciesRenderProfile.FieldOverrides[kv[0]] = float.Parse(kv[1], Inv);
+                    continue;
+                }
                 string field = kv[0];
                 string speciesOnly = null;
                 int dot = field.IndexOf('.');
@@ -260,6 +276,19 @@ namespace PocketArbor.DevTools.GrowthPreview
                 {
                     speciesOnly = field.Substring(0, dot);
                     field = field.Substring(dot + 1);
+                }
+                if (field == "PadNodeTarget")
+                {
+                    // ⚑T "PadNodeTarget=13/13/11/10/9/8" (all species or "Momiji.PadNodeTarget=…").
+                    string[] k = kv[1].Split('/');
+                    var targets = new PadNodeTargets(int.Parse(k[0]), int.Parse(k[1]), int.Parse(k[2]), int.Parse(k[3]), int.Parse(k[4]), int.Parse(k[5]));
+                    foreach (SpeciesId species in AllSpecies)
+                    {
+                        if (speciesOnly != null && species.ToString() != speciesOnly) continue;
+                        controller.SetSpecies(species);
+                        model.SpeciesConfig.PadNodeTarget = targets;
+                    }
+                    continue;
                 }
                 if (field == "TrunkSwayProfile")
                 {
@@ -362,6 +391,7 @@ namespace PocketArbor.DevTools.GrowthPreview
             Profile(builder, row, h, tree, frame);
             Primaries(builder, row, h);
             Roots(builder, seed, mossMask, frame, row, tree, noRoots);
+            MeasureT(controller, camera, row, frame, foliage, mossMask, styled, day, seed); // ⚑T PA-102T metrics
             int[] gap = styled ? controller.Model.PadGapStats(day) : null;
             if (gap != null)
             {
@@ -1037,7 +1067,7 @@ namespace PocketArbor.DevTools.GrowthPreview
             sb.Append(",profile_monotone,primary_min,primary_median,primary_max,lowest_attach_H,lowest_attach_H_base,bend_sign_changes,bend_range_H_base,"
                 + "bends_distinct,bend_range_H,bend_inequality,tips,tips_covered,twig_samples,twig_outside,roots,roots_left,roots_right,root_end_ratio,"
                 + "root_vis_median,root_vis_min,root_start_H,root_start_mask_H,root_thickness_min,root_thickness_max,gap_pairs,gap_pairs_ok,gap_first_node_cuts,"
-                + "chord_deg,max_world_deg,lowest_tier_opposite,zoom\n");
+                + "chord_deg,max_world_deg,lowest_tier_opposite,zoom," + CsvHeaderT() + "\n");
             return sb.ToString();
         }
 
@@ -1063,7 +1093,9 @@ namespace PocketArbor.DevTools.GrowthPreview
                 .Append(',').Append(F(MinOf(r.RootThickness))).Append(',').Append(F(-MinOf(r.RootThickness.ConvertAll(v => -v))))
                 .Append(',').Append(r.GapPairs).Append(',').Append(r.GapPairsOk).Append(',').Append(r.GapFirstCuts)
                 .Append(',').Append(F(r.ChordDeg)).Append(',').Append(F(r.MaxWorldDeg))
-                .Append(',').Append(r.LowestTierOpposite ? 1 : 0).Append(',').Append(F(r.Zoom)).Append('\n');
+                .Append(',').Append(r.LowestTierOpposite ? 1 : 0).Append(',').Append(F(r.Zoom)).Append(',');
+            AppendT(csv, r);
+            csv.Append('\n');
         }
 
         static string Ok(bool pass) => pass ? "OK " : "FAIL";
@@ -1171,6 +1203,7 @@ namespace PocketArbor.DevTools.GrowthPreview
                     sb.Append('\n');
                 }
             }
+            SummarizeT(sb, rows);
             sb.Append(Extra);
             return sb.ToString();
         }

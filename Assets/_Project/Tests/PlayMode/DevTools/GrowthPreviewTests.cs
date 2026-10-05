@@ -155,22 +155,25 @@ namespace PocketArbor.DevTools.Tests
                     builder.Build(model.GetTree(day), mesh, model.Config, model.SpeciesConfig);
                     Assert.AreEqual(92f, builder.LastPotWidth);
                 }
-                Assert.AreEqual(7, builder.LastRootCount);
+                // ⚑T BALANCE §1.6.4 (conscious update): clamp(round(2 + (th0 − 4)/1.6), 2, 10) → D80 9 (was 7).
+                Assert.AreEqual(9, builder.LastRootCount);
                 int left = 0, right = 0;
                 for (int r = 0; r < builder.LastRootCount; r++)
                 {
                     builder.NebariRoot(20261004u, r, builder.LastRootCount, samples);
                     if (samples[samples.Count - 1].x < 0f) left++;
                     else right++;
-                    Assert.GreaterOrEqual(samples[samples.Count - 1].z / samples[0].z, 0.45f - 1e-4f, "root " + r + " end thickness");
+                    // ⚑T §1.6.4: a forked (main) root continues × NebariRootForkMainScale after the fork.
+                    float endRatio = builder.IsMainRoot(r) ? 0.45f * builder.Render.NebariRootForkMainScale : 0.45f;
+                    Assert.GreaterOrEqual(samples[samples.Count - 1].z / samples[0].z, endRatio - 1e-4f, "root " + r + " end thickness");
                     // ⚑Q BALANCE §1.4.2 / ADR-0004 rev.4: the tip dives under the moss line; the first 75% lie on the moss (centre ≥ moss line).
                     float moss = builder.Render.MossLineY;
                     Assert.Less(samples[samples.Count - 1].y + 0.5f * samples[samples.Count - 1].z, moss, "root " + r + " tip fully under the moss line");
                     for (int k = 1; k < samples.Count * 3 / 4 - 1; k++)
                         Assert.GreaterOrEqual(samples[k].y, moss - 1e-3f, "root " + r + " sample " + k + " lies on the moss");
                 }
-                Assert.GreaterOrEqual(left, 2);
-                Assert.GreaterOrEqual(right, 2);
+                Assert.GreaterOrEqual(left, 3);
+                Assert.GreaterOrEqual(right, 3);
             }
             finally
             {

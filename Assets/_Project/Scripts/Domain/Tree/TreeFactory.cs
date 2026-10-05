@@ -10,6 +10,9 @@ namespace PocketArbor.Domain.Tree
         /// <summary>Uniform draws consumed by planting: 2 (trunk curvature) + 8 (leader) + 8 (wild twig).</summary>
         public const int PlantingDraws = 2 + 2 * ShootDraws.DrawsPerShoot;
 
+        /// <summary>Id of the wild twig #2 (ids are assigned 0, 1, 2 in planting order and never reused) — ⚑T BALANCE §1.6.1(а): group «other».</summary>
+        public const int SaplingTwigId = 2;
+
         /// <summary>
         /// Starting sapling, N = 3: #0 trunk, #1 leader (trunk segment k = 1), #2 wild twig (lateral of the trunk in slot 0,
         /// AttachT 0.30; the onboarding cut target). Growth counters are 0; the tree starts frozen (onboarding Freeze Guard).

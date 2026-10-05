@@ -222,6 +222,12 @@ namespace PocketArbor.DevTools.GrowthPreview
         public const string DefaultRoot = "Assets/_Project/Art/Runtime/Preview";
         public const string ReferencePath = "Assets/_Project/Art/Source/Section_0/realism_l2_painterly.jpg";
 
+        /// <summary>PA-102T / TD-073: default pot skin (pot_tokoname — the one with an opening, matched to the reference).</summary>
+        public const string DefaultPotSkin = "tokoname";
+
+        /// <summary>Pot skin: pot_&lt;skin&gt;.png / .json (fallback pot_tokoname, then the procedural pot).</summary>
+        public string PotSkin { get; set; } = DefaultPotSkin;
+
         static readonly string[] SpeciesKeys = { "kuromatsu", "momiji", "yamazakura" };
 
         readonly List<UnityEngine.Object> _generated = new List<UnityEngine.Object>();
@@ -246,6 +252,14 @@ namespace PocketArbor.DevTools.GrowthPreview
 
         public PadAtlas Atlas(SpeciesId species) => _atlases[Mathf.Clamp((int)species, 0, 2)];
 
+        readonly Texture2D[] _speciesTrunk = new Texture2D[3];
+        readonly Texture2D[] _speciesYoung = new Texture2D[3];
+
+        /// <summary>⚑T BALANCE §1.6.6: bark textures of <paramref name="species"/> from <see cref="Root"/> (bark_&lt;species&gt;_trunk/young.png, TA runtime copies);
+        /// null when missing — the caller falls back to <see cref="BarkTrunk"/> / <see cref="BarkYoung"/> with the placeholder tone.</summary>
+        public Texture2D SpeciesBarkTrunk(SpeciesId species) => _speciesTrunk[Mathf.Clamp((int)species, 0, 2)];
+        public Texture2D SpeciesBarkYoung(SpeciesId species) => _speciesYoung[Mathf.Clamp((int)species, 0, 2)];
+
         /// <summary>Number of TA art sets found (of 9: 2 bark, washi, 3 pad atlases with JSON, pot, 2 soils).</summary>
         public int FoundCount { get; private set; }
 
@@ -264,6 +278,14 @@ namespace PocketArbor.DevTools.GrowthPreview
             BarkIsFallback = BarkTrunk == null || BarkYoung == null;
             if (BarkTrunk == null) { BarkTrunk = Own(PreviewArtFallbacks.Bark(new Color32(0x5A, 0x42, 0x33, 0xFF), 11u)); missing.Append(" bark_trunk"); }
             if (BarkYoung == null) { BarkYoung = Own(PreviewArtFallbacks.Bark(new Color32(0x6A, 0x4B, 0x36, 0xFF), 23u)); missing.Append(" bark_young"); }
+
+            for (int sp = 0; sp < 3; sp++)
+            {
+                SpeciesRenderProfile profile = SpeciesRenderProfile.For((SpeciesId)sp);
+                _speciesTrunk[sp] = LoadTexture(profile.BarkTrunkTexture);
+                _speciesYoung[sp] = LoadTexture(profile.BarkYoungTexture);
+                if (_speciesTrunk[sp] == null || _speciesYoung[sp] == null) missing.Append(" bark_").Append(SpeciesKeys[sp]).Append("(tone)");
+            }
 
             Washi = LoadTexture("washi_bg.png");
             WashiIsFallback = Washi == null;
@@ -293,8 +315,14 @@ namespace PocketArbor.DevTools.GrowthPreview
                 _atlases[s] = atlas;
             }
 
-            Texture2D potTex = LoadTexture("pot_tokoname.png");
-            string potJson = LoadText("pot_tokoname.json");
+            string potFile = "pot_" + (string.IsNullOrEmpty(PotSkin) ? DefaultPotSkin : PotSkin);
+            Texture2D potTex = LoadTexture(potFile + ".png");
+            string potJson = potTex != null ? LoadText(potFile + ".json") : null;
+            if (potTex == null)
+            {
+                potTex = LoadTexture("pot_tokoname.png");
+                potJson = LoadText("pot_tokoname.json");
+            }
             if (potTex != null)
             {
                 found++;

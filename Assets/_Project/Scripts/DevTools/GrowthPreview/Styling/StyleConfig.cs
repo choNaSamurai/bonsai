@@ -33,8 +33,16 @@ namespace PocketArbor.DevTools.GrowthPreview
 
         /// <summary>⚑R BALANCE §1.5.3(в) S8: minimum gap (units) between the tip Y of two same-side adjacent pads; ≤ cuts per pair per pass.
         /// Ranges 10–18 / 1–3.</summary>
-        public double StylePadGapUnits = 14.0;
+        public double StylePadGapUnits = 18.0; // PA-102R 14 → PA-102T tuning 18 (range 10–18; #5/#6 vs the dome): TD-075
         public int StylePadGapCutsPerPass = 2;
+
+        /// <summary>⚑T BALANCE §1.6.2(б): S3 keeps slot 0 of the chain top — the crown shoulder (#7), a dome lateral (S7 limits it like the others).</summary>
+        public bool StyleKeepCrownShoulder = true;
+
+        /// <summary>⚑T §1.6.3(а) S10 «pad ceiling»: a tier group (t0…t5, dome) with N_g &gt; ceil(StyleTierCapRatio·T_g) loses end nodes (the highest
+        /// tip among ord ≥ 2 first, then the newest) until N_g ≤ T_g; the first node of a primary / the shoulder and the crown axis — never.
+        /// 0 = off. Range 1.00–1.25.</summary>
+        public double StyleTierCapRatio = 1.10;
 
         /// <summary>S8 geometry: the preview's Bezier Curvature offset (TreeRenderConfig.CurvatureOffsetRatio).</summary>
         public double CurvatureOffsetRatio = 0.25;
