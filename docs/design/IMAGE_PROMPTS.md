@@ -1,6 +1,6 @@
 # Image Prompts — Nano Banana (Antigravity)
 
-> Власник: Technical Artist · Підготовлено оркестратором · Статус: **v0.3 (2026-10-04)** — арт-напрям **L2 Painterly** затверджено власником; додано перегенерації за результатами першої партії і подушки листя.
+> Власник: Technical Artist · Підготовлено оркестратором · Статус: **v0.4 (2026-10-05)** — додано **B4: кора за породою** (запит власника); оновлено пріоритети після PA-103S…PA-102R.
 > Стиль і кольори — з [DESIGN_SYSTEM_AND_UI_SPEC](../reference/flutter-v3.2/DESIGN_SYSTEM_AND_UI_SPEC.md) §1, §3. Промпти англійською — так генератор працює точніше.
 
 ## Стан генерації
@@ -12,15 +12,16 @@
 | A2 | `concept_night` | ✅ готово |
 | A3 | `concept_dormancy` | 🔁 **перегенерувати** (A3 v2 нижче): виглядає «голим і мертвим» |
 | B1 | `washi_paper_tile` | ✅ готово |
-| B2 | `bark_tile` | 🔁 **перегенерувати** (B2 v2): занадто темна, груба і напівреалістична для L2 + потрібна світла версія для молодих пагонів |
+| B2 | `bark_tile` | ⏭ замінено **B4** (кора окремо для кожної породи) |
+| **B4** | **кора за породою (новий)** | ⏳ не згенеровано — **пріоритет** |
 | B3 | `soil_moist` / `soil_dry` | 🔁 **перегенерувати** (B3 v2): різна композиція, а гра плавно змішує їх між собою |
-| C1 | `pot_tokoname` | 🔁 **перегенерувати в PNG** (C v2): фон не чистий `#FF00FF`, є тінь |
+| C1 | `pot_tokoname` | ✅ тимчасово вирізано з референсу L2 (TA); C v2 — бажано для вищої роздільності |
 | C2, C3 | `pot_kuro`, `pot_celadon` | ⏳ не згенеровано |
 | D1–D4 | листки, квіти, бруньки | ⏳ не згенеровано |
-| **D5** | **подушки листя (новий)** | ⏳ не згенеровано — **пріоритет** |
+| **D5** | **подушки листя** | ⏳ не згенеровано — **пріоритет №1** (сосна зараз процедурна, сакура — перефарбований клен) |
 | E1 | `appicon_concept` | ⏳ не згенеровано |
 
-**Порядок на наступну сесію (за пріоритетом):** D5 → B2 v2 → B3 v2 → C1–C3 v2 → A3 v2 → D1–D4 → E1.
+**Порядок на наступну сесію (за пріоритетом):** D5 (усі три породи) → **B4** (кора трьох порід) → C2–C3 → A3 v2 → B3 v2 → D1–D4 → E1.
 
 ## Правила для всіх запитів
 
@@ -64,6 +65,26 @@ Seamless tileable texture, 512×512, painted bark for a stylized 2D bonsai, matc
 ```
 - **trunk:** `mature trunk bark, warm dark brown #3E2723 with lighter #6D4C41 ridges, gentle vertical furrows and a few soft knots, medium detail`
 - **young:** `young smooth branch bark, lighter warm brown #6D4C41 with subtle greenish-olive tint #7A6A4F, very fine horizontal lenticel marks, almost smooth, low detail`
+
+### B4 — кора за породою (замінює B2 v2)
+Файли: `B_Textures/bark_<species>_trunk.png`, `B_Textures/bark_<species>_young.png`, де `<species>` = `kuromatsu` / `momiji` / `yamazakura`; кожен **1024×1024**, безшовний в обох напрямках.
+Генеруй спершу `trunk`, потім `young` тієї ж породи з `trunk` як референсом («same species and palette, younger and smoother»).
+
+**Базовий промпт:**
+```
+Seamless tileable texture, 1024×1024, painted bark of a [SPECIES] bonsai for a stylized 2D game, matching the soft painterly style of the reference image (gentle brush strokes, warm diffuse light, subtle ink-like dark lines in the deepest cracks). [BARK]. Bark grain runs vertically along the image, low-to-medium contrast so it reads well when wrapped around thin procedural branches, even flat lighting with no light direction, no shadows, no highlights, no moss, no leaves, edges tile perfectly in both directions.
+```
+
+| Порода | `[SPECIES]` | `[BARK]` trunk | `[BARK]` young |
+|---|---|---|---|
+| Kuromatsu | `Japanese black pine` | `thick mature bark broken into irregular scaly plates and flakes separated by deep dark fissures, charcoal grey #3A3633 plates with warm grey-brown #5A4E44 edges and a few reddish-brown #6B4A3A undertones in the cracks` | `young pine bark, smoother with small thin flaking scales and fine fissures, warm grey-brown #6A5A4C with reddish #7A5240 tint` |
+| Momiji | `Japanese maple (Acer palmatum)` | `smooth mature maple bark with very fine shallow vertical striations and soft mottling, grey-brown #6B5E52 with olive-grey #7A7560 patches, almost no cracks` | `young maple shoot bark, very smooth, olive-green #6F7A4A blending into soft red #8A4A3A along the grain, tiny pale lenticel dots` |
+| Yamazakura | `wild Japanese cherry (Yamazakura)` | `smooth glossy cherry bark with distinctive horizontal lenticel bands (short pale stripes across the grain) and faint peeling horizontal strips, rich reddish-brown #5E3A2E with coppery sheen #7A4A36` | `young cherry bark, smooth satin reddish-brown #7A4636 with small horizontal lenticel marks, slightly lighter and warmer` |
+
+> Після генерації TA перевіряє безшовність (3×3), підганяє тон до референсу L2 і зменшує до 512² для гри. Кора стовбура і молодих гілок змішується за товщиною гілки, тож обидві текстури породи мають бути в одній палітрі.
+
+### D5 — нагадування щодо порід
+Для **сосни** і **сакури** D5 зараз найважливіший: сосна в прототипі намальована процедурно, сакура — це перефарбований клен. Для сосни додавай до запиту `A_Concept/concept_night.jpg` як другий референс форми хвої, але проси **денне світло**: `daylight colors, no fireflies, no night tint`.
 
 ### B3 v2 — ґрунт (два стани з однаковою композицією)
 Згенеруй спершу **moist**, потім **dry** з першою як референсом і фразою «exactly the same layout, only change the colors and add cracks».
