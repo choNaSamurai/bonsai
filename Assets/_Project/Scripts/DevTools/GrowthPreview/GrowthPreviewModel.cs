@@ -27,6 +27,14 @@ namespace PocketArbor.DevTools.GrowthPreview
         readonly StyleConfig _styleBaseline = StyleConfig.CreateDefault();
         ShapeStyle _shapeStyle = ShapeStyle.Moyogi;
         readonly MoyogiStyler _styler = new MoyogiStyler();
+        readonly Dictionary<int, int[]> _gapStats = new Dictionary<int, int[]>();
+
+        /// <summary>AC19 (PA-102R): S8 statistics of the styling on <paramref name="day"/> — (pairs, pairs ok, first-node cuts, pairs with nothing
+        /// cuttable); null if no styling.</summary>
+        public int[] PadGapStats(int day) => _gapStats.TryGetValue(day, out int[] stats) ? stats : null;
+
+        /// <summary>Dev diagnostics of S8 (see <see cref="MoyogiStyler.GapLog"/>).</summary>
+        public MoyogiStyler Styler => _styler;
 
         SpeciesId _speciesId = SpeciesId.Kuromatsu;
         uint _seed = 20261004u;
@@ -152,7 +160,7 @@ namespace PocketArbor.DevTools.GrowthPreview
             return result;
         }
 
-        /// <summary>PA-102P: moyogi styling S1–S7 (BALANCE §1.3.7) with the default <see cref="StyleConfig"/>. Returns the number of cuts.</summary>
+        /// <summary>PA-102P: moyogi styling S1–S8 (BALANCE §1.3.7, ⚑R §1.5.3 в) with the default <see cref="StyleConfig"/>. Returns the number of cuts.</summary>
         public static int PruneToStyle(TreeGraph tree, GrowthConfig config, SpeciesConfig species) =>
             new MoyogiStyler().PruneToStyle(tree, config, species, StyleConfig.CreateDefault());
 
@@ -174,6 +182,7 @@ namespace PocketArbor.DevTools.GrowthPreview
         void Invalidate(int fromDay)
         {
             if (_days.Count > fromDay) _days.RemoveRange(fromDay, _days.Count - fromDay);
+            if (fromDay == 0) _gapStats.Clear();
             _dayReaching200 = -2;
         }
 
@@ -189,7 +198,11 @@ namespace PocketArbor.DevTools.GrowthPreview
                 tree = TreeGraph.FromSnapshot(_days[day - 1]);
                 RunOneDay(tree);
             }
-            if (_styled && _style.IsStyleDay(day)) _styler.PruneToStyle(tree, _config, SpeciesConfig, _style);
+            if (_styled && _style.IsStyleDay(day))
+            {
+                _styler.PruneToStyle(tree, _config, SpeciesConfig, _style);
+                _gapStats[day] = new[] { _styler.LastGapPairs, _styler.LastGapPairsOk, _styler.LastGapFirstNodeCuts, _styler.LastGapPairsStuck };
+            }
             ApplyCuts(tree, day, _cuts.Count);
             return tree.ToSnapshot();
         }

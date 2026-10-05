@@ -69,7 +69,7 @@ namespace PocketArbor.Domain.Growth
         // Sapling (PlantSeed)
         public double TrunkInitialLength = 20.0;
         /// <summary>⚑P BALANCE §1.3.1: 48 → 38 (target length of trunk node #0); PA-102P tuning → 36.</summary>
-        public double TrunkTargetLength = 36.0; // PA-102P tuning (range 34–42, Proposed 38): TD-031
+        public double TrunkTargetLength = 38.0; // PA-102P tuning 36 (TD-031) → PA-102R 38 (range 34–42, AC10 lowest tier from y_rim): TD-047
         public double TrunkInitialThickness = 4.0;
         public double SaplingLeaderLength = 10.0;
         public double SaplingLeaderThickness = 1.6;
@@ -83,8 +83,8 @@ namespace PocketArbor.Domain.Growth
         // §1.2.1 Attachment point of lateral shoots (fraction of the parent length).
         public double LateralSlotT0 = 0.45;
         public double LateralSlotT1 = 0.85;
-        /// <summary>⚑Q BALANCE §1.4.1(в): 0.70 → 0.78 Proposed; PA-102Q tuning → 0.74 (range 0.74–0.82, TD-042).</summary>
-        public double TrunkBaseSlotT0 = 0.74;
+        /// <summary>⚑Q BALANCE §1.4.1(в): 0.70 → 0.78 Proposed; PA-102Q tuning → 0.74 (TD-042); ⚑R §1.5.3(а) → 0.70 (range 0.66–0.76).</summary>
+        public double TrunkBaseSlotT0 = 0.72; // PA-102R tuning (Proposed 0.70, range 0.66–0.76): TD-047
         public double TrunkBaseSlotT1 = 0.95;
         public double AttachTJitter = 0.04;
         public double AttachTMin = 0.05;
@@ -98,7 +98,8 @@ namespace PocketArbor.Domain.Growth
 
         // §1.2.3 Trunk chain (moyogi S-curve). Amplitude TrunkSwayDeg is per species.
         public int TrunkChainSegments = 5;
-        /// <summary>⚑P BALANCE §1.3.1: 0.85 → 0.88.</summary>
+        /// <summary>⚑P BALANCE §1.3.1: 0.85 → 0.88. ⚑R §1.5.4(а): replaced by SpeciesConfig.TrunkSwayProfile for k ≤ 4; used only for
+        /// chain segments beyond the profile (TrunkChainSegments > 5) and for a species without a profile.</summary>
         public double TrunkSwayDecay = 0.88;
         public double TrunkSwayJitterDeg = 3.0;
         public double TrunkCurvatureJitter = 0.10;
@@ -112,13 +113,13 @@ namespace PocketArbor.Domain.Growth
         public double TrunkSegmentJitter = 0.08;
 
         /// <summary>§1.3.1 Crown axis (ord 0, Depth ≥ TrunkChainSegments) length factor (replaces OrderLengthFactor; ×ApicalLengthMultiplier stays).</summary>
-        public double CrownAxisLengthFactor = 0.70; // PA-102P tuning (range 0.40–0.70, Proposed 0.50): TD-031
+        public double CrownAxisLengthFactor = 0.70; // ⚑R BALANCE §1.5.6 Proposed 0.60; PA-102R tuning → 0.70 (range 0.50–0.70; k4 pad vs dome): TD-047
 
-        /// <summary>§1.3.1 S-curve amplitude: A_k = TrunkSwayDeg·(1 + TrunkSwayBendGain·|bendBias|)·TrunkSwayDecay^(k−1).</summary>
+        /// <summary>§1.3.1 S-curve amplitude gain of |bendBias| (⚑R §1.5.4(а): A_k = TrunkSwayDeg·(1 + gain·|bb|)·Profile[k]·(1 + Irregularity·h_k)).</summary>
         public double TrunkSwayBendGain = 0.5;
 
         /// <summary>§1.3.1 Base lean of #0: BaseAngle(#0) = lean + TierPhase·TrunkBaseSwayRatio·A_1.</summary>
-        public double TrunkBaseSwayRatio = 0.20; // PA-102Q tuning (PA-102P range 0.2–0.5, Proposed 0.35): TD-042
+        public double TrunkBaseSwayRatio = 0.40; // ⚑R BALANCE §1.5.4(а): 0.20 → 0.40 (range 0.30–0.50)
 
         // §1.3.1 Apical delay of the trunk: an ord-0 node of index k = Depth takes an apical child only when AgeDays ≥ Base + Step·k.
         public int TrunkApicalDelayBaseDays = 4; // PA-102P tuning (range 4–8, Proposed 6): TD-031
@@ -160,20 +161,41 @@ namespace PocketArbor.Domain.Growth
         /// <summary>§1.4.3: ceiling of a lateral child of an ord-0 node (primary, crown-axis lateral) = ratio × th_at(parent, AttachT).</summary>
         public double PrimaryThicknessRatio = 0.38;
 
-        /// <summary>§1.4.3: × on the TargetLength of every ord-1 node of a primary axis (an axis starting at a trunk-chain node).</summary>
-        public double PrimaryLengthFactor = 0.85;
-
         /// <summary>§1.4.4: × on the TargetLength of crown-axis laterals and their apical continuations (apex dome).</summary>
         public double CrownLateralLengthFactor = 1.5; // PA-102Q tuning (range 1.0–1.5, Proposed 1.25): TD-042
 
         /// <summary>§1.4.4: × on the selection weight of the dome subtree (crown-axis nodes and all descendants); Σw (rate) unchanged.</summary>
-        public double DomeWeightMultiplier = 3.0; // PA-102Q tuning (range 1.5–3.0, Proposed 2.0): TD-042
+        public double DomeWeightMultiplier = 2.0; // ⚑R BALANCE §1.5.6: 3.0 → 2.0 (range 1.5–3.0)
 
-        /// <summary>§1.4.4 lever (range 0.45–0.70): slot 0 of crown-axis laterals (other non-#0 parents keep LateralSlotT0).</summary>
-        public double CrownLateralSlotT0 = 0.45;
+        /// <summary>§1.4.4 lever: slot 0 of crown-axis laterals (other non-#0 parents keep LateralSlotT0). ⚑R §1.5.3(г): 0.45 → 0.65 (range 0.45–0.70).</summary>
+        public double CrownLateralSlotT0 = 0.70; // PA-102R tuning (Proposed 0.65, range 0.45–0.70): TD-047
 
         /// <summary>§1.4.7: |TrunkLeanOffsetDeg| λ of a ShapeStyleProfile is clamped to this (owner 2026-10-05: Shakan ≤ 30°).</summary>
         public double TrunkLeanOffsetMaxDeg = 30.0;
+
+        // ---- Ideal, iteration 3 (BALANCE §1.5, PA-102R) --------------------------------------------
+
+        /// <summary>⚑R §1.5.2(а): × on the TargetLength of every node of a primary's subtree except the primary's first node
+        /// (together with the decay exponent (d − 1) − PadTierDecayCompensation·k_t). Range 0.80–1.00.</summary>
+        public double PadLengthFactor = 0.85; // PA-102R tuning (Proposed 0.92, range 0.80–1.00): TD-047
+
+        /// <summary>⚑R §1.5.4(а): h_k ∈ [−1, 1) (hash, not PCG) scales A_k by (1 + this·h_k). Range 0–0.30.</summary>
+        public double TrunkSwayIrregularity = 0.20;
+
+        /// <summary>⚑R §1.5.4(а): Curvature of chain segment k = TierPhase·(−1)^k·this·σ + tri(0, TrunkCurvatureJitter)·max(σ, min)
+        /// (bulge towards the side segment k leans to — the outer side of its top bend). Range 0–0.25.</summary>
+        public double TrunkBowCurvature = 0.15;
+
+        /// <summary>⚑R §1.5.4(б): g of the reach compensation of a primary's first node
+        /// L' = clamp(L − g·o / max(|sin θ_p|, PrimaryReachSinMin), PrimaryReachMinRatio·L, PrimaryReachMaxRatio·L). 0 = off; range 0–1.2.</summary>
+        public double PrimaryReachCompensation = 1.0; // PA-102R tuning (Proposed 0.8, range 0–1.2): TD-047
+        public double PrimaryReachSinMin = 0.5;
+        public double PrimaryReachMinRatio = 0.6;
+        public double PrimaryReachMaxRatio = 1.4;
+
+        /// <summary>⚑R §1.5.6: role weight of a crown-axis node with a free lateral slot (replaces Pad / Interior for it); × DomeWeightMultiplier.
+        /// Range 1.0–2.5.</summary>
+        public double DomeLateralWeight = 1.5;
 
         // §1.2.8 Sapling wild twig.
         public double SaplingTwigAttachT = 0.30;
@@ -198,10 +220,14 @@ namespace PocketArbor.Domain.Growth
             if (BackBudDays < 0 || BackBudRadiusEdges < 0 || !(BackBudWeightMultiplier >= 0.0)) throw new ArgumentException("Back-budding parameters must be >= 0");
             if (!(TrunkChainTaperRatio > 0.0) || !(TrunkChainDepthScaleFactor >= 0.0) || !(PrimaryThicknessRatio > 0.0))
                 throw new ArgumentException("Trunk-chain taper parameters must be positive");
-            if (!(PrimaryLengthFactor > 0.0) || !(CrownLateralLengthFactor > 0.0) || !(DomeWeightMultiplier >= 0.0))
+            if (!(CrownLateralLengthFactor > 0.0) || !(DomeWeightMultiplier >= 0.0) || !(PadLengthFactor > 0.0) || !(DomeLateralWeight >= 0.0))
                 throw new ArgumentException("Primary / dome factors must be positive");
             if (!(CrownLateralSlotT0 >= 0.0) || !(CrownLateralSlotT0 <= 1.0)) throw new ArgumentException("CrownLateralSlotT0 must be in [0, 1]");
             if (!(TrunkLeanOffsetMaxDeg >= 0.0) || !(TrunkLeanOffsetMaxDeg <= MaxShootWorldAngleDeg)) throw new ArgumentException("TrunkLeanOffsetMaxDeg must be in [0, MaxShootWorldAngleDeg]");
+            if (!(TrunkSwayIrregularity >= 0.0) || !(TrunkSwayIrregularity < 1.0)) throw new ArgumentException("TrunkSwayIrregularity must be in [0, 1)");
+            if (!(PrimaryReachCompensation >= 0.0) || !(PrimaryReachSinMin > 0.0) || !(PrimaryReachMinRatio > 0.0) || !(PrimaryReachMaxRatio >= PrimaryReachMinRatio))
+                throw new ArgumentException("Primary reach compensation parameters are invalid");
+            if (double.IsNaN(TrunkBowCurvature) || double.IsInfinity(TrunkBowCurvature)) throw new ArgumentException("TrunkBowCurvature must be finite");
             if (!(ApicalDominanceWeight >= 0.0) || !(TierWeight >= 0.0) || !(PadWeight >= 0.0) || !(InteriorWeight >= 0.0))
                 throw new ArgumentException("Role weights must be >= 0");
         }

@@ -12,7 +12,9 @@ Shader "PocketArbor/DevTools/PreviewSprite"
     SubShader
     {
         Tags { "RenderType" = "Transparent" "Queue" = "Transparent" "RenderPipeline" = "UniversalPipeline" "IgnoreProjector" = "True" }
-        Blend SrcAlpha OneMinusSrcAlpha
+        // PA-102R: separate alpha blend (over operator, outA = a + dstA·(1 − a)) — with the colour factors on alpha, partial coverage over an
+        // opaque layer left outA < 1 and the captured PNGs showed light seams / «patches» where ribbons overlap (AC21).
+        Blend SrcAlpha OneMinusSrcAlpha, One OneMinusSrcAlpha
         ZWrite Off
         Cull Off
 

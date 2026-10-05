@@ -305,7 +305,7 @@ namespace PocketArbor.DevTools.GrowthPreview
         void FrameCamera(Bounds bounds)
         {
             if (_camera == null) return;
-            float zoom = PotFraming.Zoom(_builder.LastPotWidth, PotTopY, _builder.LastTreeRect);
+            float zoom = PotFraming.Zoom(_builder.LastPotWidth, PotTopY, _builder.LastBounds); // ADR-0004 rev.5: bark (with roots) + pads
             FramedZoom = zoom;
             Rect frame = PotFraming.FrameAt(zoom, _builder.LastPotWidth, PotTopY);
             float aspect = _camera.pixelHeight > 0 ? _camera.pixelWidth / (float)_camera.pixelHeight : 1f;

@@ -54,6 +54,9 @@ namespace PocketArbor.DevTools.GrowthPreview
         readonly List<Vector2> _bUv0 = new List<Vector2>(16384);
         readonly List<Vector4> _bUv1 = new List<Vector4>(16384);
         readonly List<Vector2> _bUv2 = new List<Vector2>(16384);
+        // AC21 collar: (parent normal xy, distance outside the parent edge, light blend ≥ 0 — or −blend length: the shader blends by distance).
+        readonly List<Vector4> _bUv3 = new List<Vector4>(16384);
+        readonly List<Vector2> _bUv4 = new List<Vector2>(16384); // (ADR-0004 rev.5 edge mask × ink and AA fall-off, parent barkAge for the collar)
         readonly List<Color> _bCol = new List<Color>(16384);
         readonly List<int> _bIdx = new List<int>(49152);
 
@@ -66,6 +69,17 @@ namespace PocketArbor.DevTools.GrowthPreview
 
         readonly float[] _arcStart = new float[TreeGraph.Capacity];
         readonly float[] _arcEnd = new float[TreeGraph.Capacity];
+        readonly float[] _twistEnd = new float[TreeGraph.Capacity];
+
+        /// <summary>Distance written for vertices outside every collar (no transparency, no ink mask).</summary>
+        const float NoCollar = 1e4f;
+        static readonly Vector4 NoCollarAttr = new Vector4(0f, 0f, NoCollar, 1f);
+
+        /// <summary>AC21 harness: Id of a node whose ribbon is not emitted (−1 = none) — the «without this lateral» reference render.</summary>
+        public int DebugSkipNodeId { get; set; } = -1;
+
+        /// <summary>AC9 harness: the Nebari roots are not emitted (the «trunk without roots» silhouette).</summary>
+        public bool DebugSkipRoots { get; set; }
         readonly List<Vector3> _padOrder = new List<Vector3>(128); // (key y, Id, root index)
         readonly List<Puff> _padPuffs = new List<Puff>(256);
         readonly List<float> _padKeys = new List<float>(128);
@@ -88,7 +102,7 @@ namespace PocketArbor.DevTools.GrowthPreview
         public Bounds BuildTextured(TreeGraph tree, Mesh barkMesh, Mesh padMesh, GrowthConfig growth, SpeciesConfig species,
             TexturedStyleConfig style, PadAtlas atlas)
         {
-            _bPos.Clear(); _bUv0.Clear(); _bUv1.Clear(); _bUv2.Clear(); _bCol.Clear(); _bIdx.Clear();
+            _bPos.Clear(); _bUv0.Clear(); _bUv1.Clear(); _bUv2.Clear(); _bUv3.Clear(); _bUv4.Clear(); _bCol.Clear(); _bIdx.Clear();
             _pPos.Clear(); _pUv0.Clear(); _pUv1.Clear(); _pCol.Clear(); _pIdx.Clear();
             _padKeys.Clear();
             _puffRecords.Clear();
@@ -100,27 +114,32 @@ namespace PocketArbor.DevTools.GrowthPreview
 
             int roots = NebariRootCount(growth);
             _rootTips.Clear();
-            for (int r = 0; r < roots; r++)
-            {
-                NebariRoot(seed, r, roots, _rootSamples);
-                RecordRootTip(_rootSamples);
-                float tone = Mathf.Lerp(style.RootToneMin, style.RootToneMax, Hash01(seed, _nodes[0].Id, 311u + (uint)r));
-                AddBarkRoot(_rootSamples, Hash01(seed, _nodes[0].Id, 307u + (uint)r) * style.BarkTileWorld * 4f, tone, style);
-            }
-            int treeStart = _bPos.Count;
-
             _trunkSamples.Clear();
-            for (int i = 0; i < _count; i++) AddBarkNode(i, seed, style);
+            bool legacy = _render.CollarLegacy;
+            // ADR-0004 rev.5: ord-0 axis (trunk chain + crown axis) → roots → lateral axes (PA-102Q legacy: roots first).
+            if (legacy) AddBarkRoots(roots, seed, style);
+            int treeStart = _bPos.Count;
+            for (int i = 0; i < _count; i++) if (_shape.Order(i) == 0) AddBarkNode(i, seed, style);
+            if (!legacy) AddBarkRoots(roots, seed, style);
+            for (int i = 0; i < _count; i++) if (_shape.Order(i) != 0) AddBarkNode(i, seed, style);
             LastTaperRatio = MeasureTaper();
 
             if (atlas != null) AddTexturedPads(foliage, growth, style, atlas, seed);
 
             float minX = float.MaxValue, maxX = float.MinValue, maxY = 0f;
-            for (int v = treeStart; v < _bPos.Count; v++) Extend(_bPos[v], ref minX, ref maxX, ref maxY);
+            for (int v = 0; v < _bPos.Count; v++)
+            {
+                // Roots are excluded from the crown metrics (PA-102Q): ord-0 nodes are written first, then (rev.5) the roots.
+                if (v >= treeStart && !IsRootVertex(v)) Extend(_bPos[v], ref minX, ref maxX, ref maxY);
+            }
             for (int v = 0; v < _pPos.Count; v++) Extend(_pPos[v], ref minX, ref maxX, ref maxY);
             LastHeight = maxY;
             LastCrownWidth = maxX > minX ? maxX - minX : 0f;
             LastTreeRect = maxX > minX ? Rect.MinMaxRect(minX, 0f, maxX, maxY) : new Rect(0f, 0f, 0f, 0f);
+            float bMinX = float.MaxValue, bMaxX = float.MinValue, bMinY = float.MaxValue, bMaxY = float.MinValue;
+            for (int v = 0; v < _bPos.Count; v++) Extend4(_bPos[v], ref bMinX, ref bMaxX, ref bMinY, ref bMaxY);
+            for (int v = 0; v < _pPos.Count; v++) Extend4(_pPos[v], ref bMinX, ref bMaxX, ref bMinY, ref bMaxY);
+            LastBounds = bMaxX > bMinX ? Rect.MinMaxRect(bMinX, bMinY, bMaxX, bMaxY) : new Rect(0f, 0f, 0f, 0f);
             LastTrunkBase = _th0;
             LastTrunkBaseFlared = _th0 * (1f + _flare);
 
@@ -130,6 +149,8 @@ namespace PocketArbor.DevTools.GrowthPreview
             barkMesh.SetUVs(0, _bUv0);
             barkMesh.SetUVs(1, _bUv1);
             barkMesh.SetUVs(2, _bUv2);
+            barkMesh.SetUVs(3, _bUv3);
+            barkMesh.SetUVs(4, _bUv4);
             barkMesh.SetColors(_bCol);
             barkMesh.SetTriangles(_bIdx, 0, true);
 
@@ -144,6 +165,34 @@ namespace PocketArbor.DevTools.GrowthPreview
             Bounds bounds = barkMesh.bounds;
             if (_pPos.Count > 0) bounds.Encapsulate(padMesh.bounds);
             return bounds;
+        }
+
+        int _rootVertexStart, _rootVertexEnd;
+
+        bool IsRootVertex(int v) => v >= _rootVertexStart && v < _rootVertexEnd;
+
+        static void Extend4(Vector3 p, ref float minX, ref float maxX, ref float minY, ref float maxY)
+        {
+            minX = Mathf.Min(minX, p.x);
+            maxX = Mathf.Max(maxX, p.x);
+            minY = Mathf.Min(minY, p.y);
+            maxY = Mathf.Max(maxY, p.y);
+        }
+
+        void AddBarkRoots(int roots, uint seed, TexturedStyleConfig style)
+        {
+            _rootVertexStart = _bPos.Count;
+            for (int r = 0; r < roots && !DebugSkipRoots; r++)
+            {
+                NebariRoot(seed, r, roots, _rootSamples);
+                RecordRootTip(_rootSamples);
+                float tone = Mathf.Lerp(style.RootToneMin, style.RootToneMax, Hash01(seed, _nodes[0].Id, 311u + (uint)r));
+                // ADR-0004 rev.5: v of a root continues the #0 bark at its start (legacy: a hashed phase).
+                float arc0 = _render.CollarLegacy ? Hash01(seed, _nodes[0].Id, 307u + (uint)r) * style.BarkTileWorld * 4f
+                    : _arcStart[0] + _render.NebariRootStartHeightRatio * _th0;
+                AddBarkRoot(_rootSamples, arc0, tone, style);
+            }
+            _rootVertexEnd = _bPos.Count;
         }
 
         static void Extend(Vector3 p, ref float minX, ref float maxX, ref float maxY)
@@ -162,17 +211,28 @@ namespace PocketArbor.DevTools.GrowthPreview
             bool lateral = parent >= 0 && node.BranchSide != 0;
             bool axisRoot = parent < 0 || lateral;
             bool trunkChain = _shape.IsTrunkChain(i);
-            float arc0 = axisRoot ? Hash01(seed, node.Id, 401u) * style.BarkTileWorld * 4f : _arcEnd[parent];
+            bool ord0 = _shape.Order(i) == 0;
+            bool legacy = _render.CollarLegacy;
+            // ADR-0004 rev.5: a lateral's bark v starts at the parent's v at AttachT (legacy: hash(Seed, Id)).
+            float arc0 = !axisRoot ? _arcEnd[parent]
+                : lateral && !legacy ? Mathf.Lerp(_arcStart[parent], _arcEnd[parent], (float)node.AttachT)
+                : Hash01(seed, node.Id, 401u) * style.BarkTileWorld * 4f;
             _arcStart[i] = arc0;
+            float twist = ord0 && parent >= 0 ? _twistEnd[parent] : 0f;
 
-            // A lateral starts on its parent's centre line: collar flare + ink fading in once the ribbon leaves the parent.
-            float parentHalf = 0f, collarLength = 1f;
+            // A lateral starts on its parent's centre line: collar flare (smoothstep) + the AC21 collar mask.
+            float parentHalf = 0f, collarLength = 1f, collarZone = 0f, parentAge = 0f;
             if (lateral)
             {
                 Vector2 attach = Eval(parent, (float)node.AttachT);
-                parentHalf = 0.5f * Width(parent, (float)node.AttachT, attach.y);
+                float parentWidth = Width(parent, (float)node.AttachT, attach.y);
+                parentHalf = 0.5f * parentWidth;
                 collarLength = parentHalf + (float)node.Thickness;
+                parentAge = BarkAge(parentWidth, _shape.IsTrunkChain(parent), style);
+                float sin = Mathf.Abs(Vector2.Dot(_dir[i], new Vector2(-_dir[parent].y, _dir[parent].x)));
+                collarZone = parentHalf / Mathf.Max(0.25f, sin) + (1f + _render.CollarBlendRatio) * (float)node.Thickness + 2f;
             }
+            bool skip = node.Id == DebugSkipNodeId;
 
             int start = _bPos.Count;
             float arc = arc0;
@@ -182,43 +242,90 @@ namespace PocketArbor.DevTools.GrowthPreview
             float tEnd = BarkEndT(i);
             int sectionCount = Sections(i);
             bool flare = sectionCount != SegmentSamples;
+            float tile = Mathf.Max(1e-3f, style.BarkTileWorld);
             for (int s = 0; s <= sectionCount; s++)
             {
                 float t = tEnd * SectionT(s, sectionCount, flare);
                 Vector2 point = Eval(i, t);
-                Vector2 tangent = Eval(i, Mathf.Min(1f, t + 0.01f)) - Eval(i, Mathf.Max(0f, t - 0.01f));
-                tangent = tangent.sqrMagnitude > 1e-10f ? tangent.normalized : _dir[i];
-                arc += (point - previous).magnitude;
+                Vector2 tangent = SectionTangent(i, t);
+                float step = (point - previous).magnitude;
+                arc += step;
+                if (ord0) twist += _swayScale * TwistSign(i, t) * step / tile;
                 float width = Width(i, t, point.y);
                 float ink = 1f;
                 Color tint = Color.white;
+                Vector4 collarA = NoCollarAttr, collarB = NoCollarAttr;
+                float age = BarkAge(width, trunkChain, style), parentAgeAttr = age;
                 if (lateral)
                 {
                     float local = arc - arc0;
                     width *= 1f + style.CollarFlare * (1f - Mathf.SmoothStep(0f, 1f, local / collarLength));
-                    ink = Mathf.SmoothStep(0f, 1f, (local - 0.6f * parentHalf) / (0.6f * parentHalf + 0.5f * (float)node.Thickness + 1e-3f));
-                    // The square start of the ribbon (inside the parent) fades in → no flap where it pokes out of the parent.
-                    tint.a = Mathf.SmoothStep(0f, 1f, local / (style.CollarFadeIn * parentHalf + 1e-3f));
+                    if (legacy)
+                    {
+                        ink = Mathf.SmoothStep(0f, 1f, (local - 0.6f * parentHalf) / (0.6f * parentHalf + 0.5f * (float)node.Thickness + 1e-3f));
+                        // The square start of the ribbon (inside the parent) fades in → no flap where it pokes out of the parent.
+                        tint.a = Mathf.SmoothStep(0f, 1f, local / (style.CollarFadeIn * parentHalf + 1e-3f));
+                    }
+                    else if (local < collarZone)
+                    {
+                        // AC21: per vertex — distance outside the parent's silhouette (shader: transparent inside, ink only outside) and the
+                        // light / bark-age blend from the parent's (at its edge) to the lateral's own over CollarBlendRatio × thickness.
+                        Vector2 side = new Vector2(-tangent.y, tangent.x) * (0.5f * width);
+                        float blendLength = Mathf.Max(0.3f, _render.CollarBlendRatio * (float)node.Thickness);
+                        collarA = CollarAttribute(parent, point + side, blendLength);
+                        collarB = CollarAttribute(parent, point - side, blendLength);
+                        parentAgeAttr = parentAge;
+                    }
                 }
                 if (trunkChain) _trunkSamples.Add(new Vector2(point.y, width));
-                AddBarkSection(point, tangent, width, arc, BarkAge(width, trunkChain, style), ink, tint);
+                if (!skip) AddBarkSection(point, tangent, width, arc, age, age, ink, tint, twist, collarA, collarB, 1f, 1f, parentAgeAttr);
                 previous = point;
                 lastTangent = tangent;
                 lastWidth = width;
             }
             _arcEnd[i] = arc;
+            _twistEnd[i] = twist;
+            if (skip) return;
 
             int sections = sectionCount + 1;
             if (_shape.ApicalChild(i) < 0)
             {
                 // Rounded-off terminal tip: one extra section past the tip, nearly closed.
                 float capLength = style.CapLengthRatio * lastWidth;
+                float capAge = BarkAge(lastWidth, trunkChain, style);
                 AddBarkSection(previous + lastTangent * capLength, lastTangent, lastWidth * style.CapWidthRatio, arc + capLength,
-                    BarkAge(lastWidth, trunkChain, style), 1f, Color.white);
+                    capAge, capAge, 1f, Color.white, twist, NoCollarAttr, NoCollarAttr, 1f, 1f);
                 sections++;
             }
             AddRibbonIndices(start, sections);
         }
+
+        /// <summary>(parent normal xy, signed distance outside the parent's silhouette, −<paramref name="blendLength"/>: the shader blends light and
+        /// bark age from the parent's to the lateral's by smoothstep(0, blendLength, d) per pixel — a per-vertex blend would be linear over a whole
+        /// section and step at the collar edge).</summary>
+        Vector4 CollarAttribute(int parent, Vector2 vertex, float blendLength)
+        {
+            float d = SilhouetteDistance(parent, vertex, out Vector2 normal);
+            return new Vector4(normal.x, normal.y, d, -blendLength);
+        }
+
+        /// <summary>
+        /// ⚑R §1.5.4(в) / ADR-0004 rev.5: sign of the bark twist on ord-0 node <paramref name="i"/> at <paramref name="t"/> — TierPhase·(−1)^Depth,
+        /// blended (smoothstep) to the neighbour's sign over ±JointBlend around each joint, so the twist phase is continuous and only the fibre
+        /// angle changes.
+        /// </summary>
+        float TwistSign(int i, float t)
+        {
+            float own = SegmentSign(_nodes[i].Depth);
+            float blend = Mathf.Max(1e-3f, _render.JointBlend);
+            int parent = _nodes[i].ParentIndex;
+            if (parent >= 0 && t < blend) return Mathf.Lerp(SegmentSign(_nodes[parent].Depth), own, Mathf.SmoothStep(0f, 1f, 0.5f + 0.5f * t / blend));
+            if (_shape.ApicalChild(i) >= 0 && t > 1f - blend)
+                return Mathf.Lerp(own, SegmentSign(_nodes[i].Depth + 1), Mathf.SmoothStep(0f, 1f, 0.5f * (t - (1f - blend)) / blend));
+            return own;
+        }
+
+        float SegmentSign(int depth) => _tierPhase * ((depth & 1) == 0 ? 1f : -1f);
 
         void AddBarkRoot(List<Vector3> samplesXyw, float arc0, float tone, TexturedStyleConfig style)
         {
@@ -226,6 +333,9 @@ namespace PocketArbor.DevTools.GrowthPreview
             int start = _bPos.Count;
             float arc = arc0;
             Vector2 previous = samplesXyw[0];
+            bool legacy = _render.CollarLegacy;
+            float baseWidth = Mathf.Max(0.15f, samplesXyw[0].z);
+            float join = Mathf.Max(0.3f, _render.NebariRootJoinBlend * baseWidth);
             for (int s = 0; s <= samples; s++)
             {
                 Vector2 point = samplesXyw[s];
@@ -233,31 +343,64 @@ namespace PocketArbor.DevTools.GrowthPreview
                 tangent = tangent.sqrMagnitude > 1e-8f ? tangent.normalized : Vector2.right;
                 arc += (point - previous).magnitude;
                 float width = Mathf.Max(0.15f, samplesXyw[s].z);
-                float ink = Mathf.SmoothStep(0f, 1f, (arc - arc0 - 0.2f * _th0) / (0.4f * _th0 + 1e-3f));
-                AddBarkSection(point, tangent, width, arc, 1f, ink, new Color(tone, tone, tone, 1f)); // TA: barkAge 1 (bark_trunk only), tone per root
+                float local = arc - arc0;
+                if (legacy)
+                {
+                    float ink = Mathf.SmoothStep(0f, 1f, (local - 0.2f * _th0) / (0.4f * _th0 + 1e-3f));
+                    AddBarkSection(point, tangent, width, arc, 1f, 1f, ink, new Color(tone, tone, tone, 1f), 0f, NoCollarAttr, NoCollarAttr, 1f, 1f);
+                }
+                else
+                {
+                    // ADR-0004 rev.5 «маска стику»: the root body is opaque; on its inner (axis-facing) edge the ink and AA fall-off grow from 0
+                    // over NebariRootJoinBlend × width, the outer edge continues the trunk contour (full ink); light and tone blend from the trunk's.
+                    float ramp = Mathf.SmoothStep(0f, 1f, local / join);
+                    Vector2 side = new Vector2(-tangent.y, tangent.x) * (0.5f * width);
+                    Vector4 a = RootCollar(point + side, ramp), b = RootCollar(point - side, ramp);
+                    float axisX = Eval(0, 0f).x;
+                    bool plusOuter = Mathf.Abs(point.x + side.x - axisX) >= Mathf.Abs(point.x - side.x - axisX);
+                    float shade = Mathf.Lerp(1f, tone, ramp);
+                    // The start section lies on the trunk: it fades in with the same ramp, so its cross cut never shows (no notch).
+                    AddBarkSection(point, tangent, width, arc, 1f, 1f, 1f, new Color(shade, shade, shade, ramp), 0f, a, b,
+                        plusOuter ? 1f : ramp, plusOuter ? ramp : 1f);
+                }
                 previous = point;
             }
             AddRibbonIndices(start, samples + 1);
+        }
+
+        Vector4 RootCollar(Vector2 vertex, float ramp)
+        {
+            if (ramp >= 1f) return NoCollarAttr;
+            SilhouetteDistance(0, vertex, out Vector2 normal);
+            return new Vector4(normal.x, normal.y, NoCollar, ramp);
         }
 
         float BarkAge(float width, bool trunkChain, TexturedStyleConfig style) =>
             Mathf.Clamp01(Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(style.YoungMaxWidth, style.TrunkMinWidth, width))
                 + (trunkChain ? style.TrunkChainAgeBias : 0f));
 
-        void AddBarkSection(Vector2 point, Vector2 tangent, float width, float arc, float barkAge, float ink, Color tint)
+        /// <summary>Two vertices of a ribbon section (A = +side, B = −side): UV1 = (width, barkAge, ink, twist phase φ), UV3 = collar attribute,
+        /// UV4.x = edge mask (× ink and AA fall-off).</summary>
+        void AddBarkSection(Vector2 point, Vector2 tangent, float width, float arc, float ageA, float ageB, float ink, Color tint, float twist,
+            Vector4 collarA, Vector4 collarB, float maskA, float maskB, float parentAge = -1f)
         {
+            float pa = parentAge >= 0f ? parentAge : ageA, pb = parentAge >= 0f ? parentAge : ageB;
             Vector2 side = new Vector2(-tangent.y, tangent.x);
             Vector2 half = side * (width * 0.5f);
             Color c = _linear ? tint.linear : tint;
             _bPos.Add(point + half);
             _bUv0.Add(new Vector2(0f, arc));
-            _bUv1.Add(new Vector4(width, barkAge, ink, 0f));
+            _bUv1.Add(new Vector4(width, ageA, ink, twist));
             _bUv2.Add(side);
+            _bUv3.Add(collarA);
+            _bUv4.Add(new Vector2(maskA, pa));
             _bCol.Add(c);
             _bPos.Add(point - half);
             _bUv0.Add(new Vector2(1f, arc));
-            _bUv1.Add(new Vector4(width, barkAge, ink, 0f));
+            _bUv1.Add(new Vector4(width, ageB, ink, twist));
             _bUv2.Add(side);
+            _bUv3.Add(collarB);
+            _bUv4.Add(new Vector2(maskB, pb));
             _bCol.Add(c);
         }
 
@@ -334,10 +477,20 @@ namespace PocketArbor.DevTools.GrowthPreview
             if (n == 0) return;
             meanRy /= n;
             float varX = sxx / n - (sx / n) * (sx / n);
-            float slope = varX > 1f ? Mathf.Clamp((sxy / n - (sx / n) * (sy / n)) / varX, -style.PadMaxSlope, style.PadMaxSlope) : 0f;
+            // ⚑R BALANCE §1.5.2(б): side pads lie flatter (PadRowSlopeMaxSide 0.12) than the apex dome (PadMaxSlope 0.35).
+            float maxSlope = dome ? style.PadMaxSlope : foliage.PadRowSlopeMaxSide;
+            float slope = varX > 1f ? Mathf.Clamp((sxy / n - (sx / n) * (sy / n)) / varX, -maxSlope, maxSlope) : 0f;
             float intercept = sy / n - slope * sx / n;
             float brightness = fresh * freshNodes / Mathf.Max(1, nodes);
 
+            // ⚑R BALANCE §1.5.2(в) / ADR-0004 rev.5: a full side pad is laid out over the virtual span S = max(U, PadSideMinSpanUnits) about the
+            // middle of its union — more / larger sprites, never a non-uniform stretch.
+            if (!dome && foliage.PadSideMinSpanUnits > 0f && maxX - minX < foliage.PadSideMinSpanUnits)
+            {
+                float mid = 0.5f * (minX + maxX);
+                minX = mid - 0.5f * foliage.PadSideMinSpanUnits;
+                maxX = mid + 0.5f * foliage.PadSideMinSpanUnits;
+            }
             float width = maxX - minX;
             float maxSprite = style.PadSpriteMaxWidthRatio * foliage.PuffRadius;
             int columns = Mathf.Max(1, Mathf.CeilToInt(width / maxSprite - 0.15f));

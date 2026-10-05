@@ -37,6 +37,8 @@ namespace PocketArbor.DevTools.GrowthPreview
         static readonly int InkPxId = Shader.PropertyToID("_InkPx");
         static readonly int InkShareId = Shader.PropertyToID("_InkMaxShare");
         static readonly int AAExpandId = Shader.PropertyToID("_AAExpandPx");
+        static readonly int TwistShearId = Shader.PropertyToID("_BarkTwistShear");
+        static readonly int CollarOverlapId = Shader.PropertyToID("_CollarOverlapPx");
         static readonly int MainTexId = Shader.PropertyToID("_MainTex");
         static readonly int ColorId = Shader.PropertyToID("_Color");
 
@@ -193,19 +195,23 @@ namespace PocketArbor.DevTools.GrowthPreview
         {
             if (!art.Loaded) art.Load();
             SpeciesId species = tree.Genome.Species;
-            _bark.Material.SetTexture(BarkTrunkId, art.BarkTrunk);
-            _bark.Material.SetTexture(BarkYoungId, art.BarkYoung);
+            _bark.Material.SetTexture(BarkTrunkId, BarkOverride != null ? BarkOverride : art.BarkTrunk);
+            _bark.Material.SetTexture(BarkYoungId, BarkOverride != null ? BarkOverride : art.BarkYoung);
             PadAtlas atlas = art.Atlas(species);
             _pads.Material.SetTexture(MainTexId, atlas.Texture);
 
             Bounds bounds = builder.BuildTextured(tree, _bark.Mesh, _pads.Mesh, model.Config, model.SpeciesConfig, Style, atlas);
+            // ⚑R BALANCE §1.5.4(в) / AC21: render knobs of the bark material (no mesh rebuild needed when tuned).
+            _bark.Material.SetFloat(TwistShearId, builder.Render.BarkTwistShear);
+            _bark.Material.SetFloat(CollarOverlapId, builder.Render.CollarOverlapPx);
 
             // Pot: ⚑P BALANCE §1.3.0 — the outer front rim is P = TreeRenderConfig.PotWidthUnits (fixed 92 units, like the 566 px
-            // of the reference); the trunk base (y = 0) sits TreeBaseInOpening of the way from the front to the back inner edge of the
-            // opening; centred on the opening.
+            // of the reference); ⚑R §1.5.1 — the top of the pot sprite (y_rim, row 1068 of the reference) sits TreeBaseBelowRimUnits above
+            // the trunk base (y = 0); centred on the opening.
             PotArt pot = art.Pot;
             float upp = builder.LastPotWidth / Mathf.Max(1f, pot.OuterRight - pot.OuterLeft); // world units per pot pixel
-            float baseY = pot.BaseY(Style.TreeBaseInOpening);
+            float baseY = pot.Height - Style.TreeBaseBelowRimUnits / Mathf.Max(1e-4f, upp);
+            float openingT = pot.HasOpening ? Mathf.Clamp01(Mathf.InverseLerp(pot.LipY, pot.InnerTopY, baseY)) : 0f;
             float left = -0.5f * (pot.InnerLeft + pot.InnerRight) * upp;
             var potRect = new Rect(left, -baseY * upp, pot.Width * upp, pot.Height * upp);
             _pot.Material.SetTexture(MainTexId, pot.Texture);
@@ -228,7 +234,7 @@ namespace PocketArbor.DevTools.GrowthPreview
             // moss rows are squashed, not cut; roots lie on the moss line (ADR-0004 rev.4) and dive under it only with their last 25%,
             // where a moss tuft (same texture) covers the entry point.
             TreeRenderConfig render = builder.Render;
-            float bandWidth = pot.OpeningWidth(Style.TreeBaseInOpening) * upp * Style.SoilFrontWidthRatio;
+            float bandWidth = pot.OpeningWidth(openingT) * upp * Style.SoilFrontWidthRatio;
             float bandGround = render.SoilFrontGroundY;
             float groundV = 1f - Mathf.Clamp01(soil.GroundFromTop / Mathf.Max(1f, soil.Height));
             float bandBottomV = 1f - Mathf.Clamp01((soil.GroundFromTop + Style.SoilFrontBandPx(soil.Height)) / Mathf.Max(1f, soil.Height));
@@ -277,6 +283,9 @@ namespace PocketArbor.DevTools.GrowthPreview
             bounds.Encapsulate(new Vector3(potRect.xMax, potRect.yMax, 0f));
             return bounds;
         }
+
+        /// <summary>AC21 harness: a flat texture for both barks (luminance = shading only) while set; null = the art.</summary>
+        public Texture2D BarkOverride { get; set; }
 
         /// <summary>World y of the top of the SoilFront moss band after the last rebuild (moss line, harness).</summary>
         public float MossTopY { get; private set; }

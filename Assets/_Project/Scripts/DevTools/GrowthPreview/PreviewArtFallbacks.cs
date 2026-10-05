@@ -208,18 +208,8 @@ namespace PocketArbor.DevTools.GrowthPreview
             (byte)Mathf.Clamp(Mathf.RoundToInt(c.g * f), 0, 255),
             (byte)Mathf.Clamp(Mathf.RoundToInt(c.b * f), 0, 255), c.a);
 
-        static float Hash01(uint seed, int id, uint salt)
-        {
-            unchecked
-            {
-                uint h = seed ^ (0x9E3779B9u * (uint)(id + 1)) ^ (salt * 0x85EBCA6Bu);
-                h ^= h >> 16;
-                h *= 0x7FEB352Du;
-                h ^= h >> 15;
-                h *= 0x846CA68Bu;
-                h ^= h >> 16;
-                return (h >> 8) * (1f / 16777216f);
-            }
-        }
+        /// <summary>Render hash (randomSeed, Id, salt) → [0, 1): the Domain <see cref="PocketArbor.Domain.Random.StableHash"/> (TD-018, ADR-0003
+        /// PA-102R — one implementation; 24-bit result, exact in float).</summary>
+        static float Hash01(uint seed, int id, uint salt) => (float)PocketArbor.Domain.Random.StableHash.Hash01(seed, id, salt);
     }
 }

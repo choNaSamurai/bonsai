@@ -1,4 +1,5 @@
 using System;
+using PocketArbor.Domain.Random;
 using PocketArbor.Domain.Tree;
 
 namespace PocketArbor.Domain.Growth
@@ -150,7 +151,9 @@ namespace PocketArbor.Domain.Growth
             {
                 case Role.TrunkSegment:
                     // ⚑Q BALANCE §1.4.7: chain Curvature × max(σ, TrunkSwayJitterMinScale) (× 1 for Moyogi).
-                    curvature = GrowthFormulas.Triangular(0.0, config.TrunkCurvatureJitter, u.U6, u.U7) * shape.JitterScale;
+                    // ⚑R §1.5.4(а): + the bow TierPhase·(−1)^k·TrunkBowCurvature·σ (no RNG; same u6, u7).
+                    curvature = TrunkBowCurvature(depth, genome.Seed, in shape)
+                        + GrowthFormulas.Triangular(0.0, config.TrunkCurvatureJitter, u.U6, u.U7) * shape.JitterScale;
                     break;
                 case Role.CrownAxis:
                     curvature = GrowthFormulas.Triangular(0.0, species.CurvatureSpread, u.U6, u.U7);
@@ -164,8 +167,10 @@ namespace PocketArbor.Domain.Growth
                     break;
             }
 
-            double targetLength = TargetLength(role, depth, orderEff, u.U5, config, in shape,
-                AxisFactor(nodes, parentIndex, role, parentChain, parentCrown, parentOrder, config, in shape));
+            double axisFactor = AxisFactor(nodes, parentIndex, role, parentChain, parentCrown, parentOrder, config, in shape, out int padTier);
+            double targetLength = TargetLength(role, depth, orderEff, u.U5, config, in shape, axisFactor, padTier);
+            // ⚑R BALANCE §1.5.4(б): the first node of a primary is shortened / lengthened by the S-offset of its attachment.
+            if (role == Role.Primary) targetLength = ReachCompensatedLength(tree, parentIndex, attachT, side, world, targetLength, config, in shape);
 
             return new NodeData
             {
@@ -194,16 +199,22 @@ namespace PocketArbor.Domain.Growth
         /// laterals — §1.1 base × OrderLengthFactor^min(ordEff, 2).
         /// </summary>
         /// <remarks>⚑Q BALANCE §1.4.3 / §1.4.4: <paramref name="axisFactor"/> = PrimaryLengthFactor (ord-1 nodes of a primary axis),
-        /// CrownLateralLengthFactor (crown-axis laterals and their continuations) or 1, multiplied last.</remarks>
-        static double TargetLength(Role role, int depth, int orderEff, double u5, GrowthConfig config, in ShapeParams shape, double axisFactor)
+        /// CrownLateralLengthFactor (crown-axis laterals and their continuations) or 1, multiplied last.
+        /// ⚑R §1.5.2(а): <paramref name="padTier"/> = k_t ≥ 0 for a node of a primary's subtree other than the primary's first node — the
+        /// decay exponent becomes (d − 1) − PadTierDecayCompensation·k_t and the length × PadLengthFactor; −1 = unchanged.</remarks>
+        static double TargetLength(Role role, int depth, int orderEff, double u5, GrowthConfig config, in ShapeParams shape, double axisFactor,
+            int padTier)
         {
             if (role == Role.TrunkSegment)
             {
                 return shape.TrunkSegmentLength * Math.Pow(shape.TrunkSegmentDecay, depth - 1)
                     * (1.0 + config.TrunkSegmentJitter * (2.0 * u5 - 1.0));
             }
-            double length = config.ShootBaseLength * Math.Pow(config.ShootLengthDecay, depth - 1)
+            bool pad = padTier >= 0 && role != Role.CrownAxis;
+            double exponent = pad ? depth - 1 - shape.PadTierDecayCompensation * padTier : depth - 1;
+            double length = config.ShootBaseLength * Math.Pow(config.ShootLengthDecay, exponent)
                 * (1.0 + config.ShootLengthJitter * (2.0 * u5 - 1.0));
+            if (pad) length *= shape.PadLengthFactor;
             switch (role)
             {
                 case Role.CrownAxis: return length * config.ApicalLengthMultiplier * shape.CrownAxisLengthFactor;
@@ -218,18 +229,66 @@ namespace PocketArbor.Domain.Growth
         /// ord-1 axis rooted on the crown axis — CrownLateralLengthFactor; otherwise 1. No RNG, O(depth), allocation-free.
         /// </summary>
         static double AxisFactor(ReadOnlySpan<NodeData> nodes, int parentIndex, Role role, bool parentChain, bool parentCrown, int parentOrder,
+            GrowthConfig config, in ShapeParams shape, out int padTier)
+        {
+            padTier = -1;
+            if (role == Role.Primary) return shape.PrimaryLengthFactor;
+            if (role == Role.TrunkSegment || role == Role.CrownAxis || parentOrder < 1) return parentCrown && role == Role.Secondary
+                ? shape.CrownLateralLengthFactor : 1.0;
+            // ⚑R §1.5.2(а): the parent lies in an ord ≥ 1 subtree; its topmost lateral (the ord-1 axis root) sits on an ord-0 node —
+            // a chain node k_t (a primary's subtree) or the crown axis (the dome: unchanged). O(depth), no allocation.
+            int ord1Root = -1;
+            for (int i = parentIndex; i > 0; i = nodes[i].ParentIndex)
+            {
+                if (nodes[i].BranchSide != 0) ord1Root = i;
+            }
+            int axisParent = ord1Root > 0 ? nodes[ord1Root].ParentIndex : -1;
+            bool chainRooted = axisParent >= 0 && nodes[axisParent].Depth < config.TrunkChainSegments;
+            if (chainRooted) padTier = nodes[axisParent].Depth;
+            if (role == Role.Secondary || parentOrder != 1 || axisParent < 0) return 1.0;
+            // The parent of an ord-1 axis root is an ord-0 node: chain (Depth < segments) or crown axis.
+            return chainRooted ? shape.PrimaryLengthFactor : shape.CrownLateralLengthFactor;
+        }
+
+        /// <summary>
+        /// ⚑R BALANCE §1.5.4(б) reach compensation of a primary's first node:
+        /// L' = clamp(L − g·o / max(|sin θ_p|, PrimaryReachSinMin), PrimaryReachMinRatio·L, PrimaryReachMaxRatio·L),
+        /// o = side_screen·(x_attach − x_lean(y_attach)), side_screen = −side (a lateral of side s points to x sign −s);
+        /// (x, y)_attach from the TargetLength and world angles of the chain below (AttachT, no Curvature);
+        /// x_lean(y) = −y·tan(lean + λ·TierPhase) — the straight leaning line without the S (the Shakan lean is not compensated).
+        /// No RNG, O(depth), allocation-free.
+        /// </summary>
+        public static double ReachCompensatedLength(TreeGraph tree, int parentIndex, double attachT, int side, double worldAngle, double length,
             GrowthConfig config, in ShapeParams shape)
         {
-            if (role == Role.Primary) return shape.PrimaryLengthFactor;
-            if (role == Role.Secondary) return parentCrown ? shape.CrownLateralLengthFactor : 1.0;
-            if (role != Role.Continuation || parentOrder != 1) return 1.0;
-            int root = parentIndex;
-            while (nodes[root].BranchSide == 0 && nodes[root].ParentIndex >= 0) root = nodes[root].ParentIndex;
-            int axisParent = nodes[root].ParentIndex;
-            if (axisParent < 0) return 1.0;
-            // The parent of an ord-1 axis root is an ord-0 node: chain (Depth < segments) or crown axis.
-            return nodes[axisParent].Depth < config.TrunkChainSegments ? shape.PrimaryLengthFactor : shape.CrownLateralLengthFactor;
+            double g = shape.PrimaryReachCompensation;
+            if (!(g > 0.0) || side == 0) return length;
+            ReadOnlySpan<NodeData> nodes = tree.Nodes;
+            // Walk down the chain from the parent: the attachment point = AttachT·TL(parent)·dir(parent) + Σ TL(a)·dir(a) over the ancestors.
+            double world = tree.WorldAngle(parentIndex);
+            double x = -attachT * nodes[parentIndex].TargetLength * Math.Sin(world);
+            double y = attachT * nodes[parentIndex].TargetLength * Math.Cos(world);
+            for (int i = parentIndex; nodes[i].ParentIndex >= 0;)
+            {
+                world -= nodes[i].CurrentAngle;
+                i = nodes[i].ParentIndex;
+                x -= nodes[i].TargetLength * Math.Sin(world);
+                y += nodes[i].TargetLength * Math.Cos(world);
+            }
+            TreeGenome genome = tree.Genome;
+            double leanDeg = genome.BendBias * config.TrunkBendScaleDeg + shape.LeanOffsetDeg * TreeShapeAnalysis.TierPhase(genome.Seed);
+            double xLean = -y * Math.Tan(leanDeg * GrowthFormulas.DegToRad);
+            double offset = -side * (x - xLean);
+            double sin = Math.Abs(Math.Sin(worldAngle));
+            if (!(sin > config.PrimaryReachSinMin)) sin = config.PrimaryReachSinMin;
+            double compensated = length - g * offset / sin;
+            return GrowthFormulas.Clamp(compensated, config.PrimaryReachMinRatio * length, config.PrimaryReachMaxRatio * length);
         }
+
+        /// <summary>⚑R BALANCE §1.5.4(а): bow of chain segment k = TierPhase·(−1)^k·TrunkBowCurvature·σ (positive Curvature bulges to the +side,
+        /// i.e. towards the side segment k leans to — the outer side of its top bend).</summary>
+        public static double TrunkBowCurvature(int k, uint seed, in ShapeParams shape) =>
+            TreeShapeAnalysis.TierPhase(seed) * ((k & 1) == 0 ? 1.0 : -1.0) * shape.TrunkBowCurvature * shape.SwayScale;
 
         /// <summary>⚑P BALANCE §1.3.1: AgeDays of an ord-0 node of index k = Depth is below TrunkApicalDelayBaseDays + StepDays·k.</summary>
         public static bool IsApicalDelayed(in NodeData node, GrowthConfig config) =>
@@ -295,7 +354,8 @@ namespace PocketArbor.Domain.Growth
                 + config.TrunkSwayJitterDeg * shape.JitterScale * jitter;
         }
 
-        /// <summary>⚑P BALANCE §1.3.1: A_k = TrunkSwayDeg·(1 + TrunkSwayBendGain·|bendBias|)·TrunkSwayDecay^(k−1) (before σ).</summary>
+        /// <summary>⚑R BALANCE §1.5.4(а): A_k = TrunkSwayDeg·(1 + TrunkSwayBendGain·|bendBias|)·TrunkSwayProfile[k]·(1 + TrunkSwayIrregularity·h_k)
+        /// (before σ), h_k = 2·hash01(randomSeed, k, "SWAY") − 1 (<see cref="StableHash"/>, not the PCG stream).</summary>
         public static double TrunkSwayAmplitudeDeg(int k, in TreeGenome genome, GrowthConfig config, SpeciesConfig species)
         {
             ShapeParams shape = ShapeParams.Resolve(config, species);
@@ -303,7 +363,11 @@ namespace PocketArbor.Domain.Growth
         }
 
         public static double TrunkSwayAmplitudeDeg(int k, in TreeGenome genome, in ShapeParams shape, GrowthConfig config) =>
-            shape.TrunkSwayDeg * (1.0 + config.TrunkSwayBendGain * Math.Abs(genome.BendBias)) * Math.Pow(shape.TrunkSwayDecay, k - 1);
+            shape.TrunkSwayDeg * (1.0 + config.TrunkSwayBendGain * Math.Abs(genome.BendBias)) * shape.SwayProfileAt(k)
+                * (1.0 + shape.TrunkSwayIrregularity * SwayHash(k, genome.Seed));
+
+        /// <summary>⚑R §1.5.4(а): h_k ∈ [−1, 1) — hash of (randomSeed, k, "SWAY"); the same for the same seed.</summary>
+        public static double SwayHash(int k, uint seed) => StableHash.Signed(seed, k, StableHash.SwaySalt);
 
         /// <summary>⚑Q BALANCE §1.4.7: world angle of #0 = lean + λ·TierPhase + TierPhase·TrunkBaseSwayRatio·A_1·σ (degrees, before Pot Lip).</summary>
         public static double TrunkBaseWorldAngleDeg(in TreeGenome genome, GrowthConfig config, SpeciesConfig species)

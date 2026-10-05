@@ -105,10 +105,9 @@ namespace PocketArbor.DevTools.GrowthPreview
         public float FreshBrightnessMax = 1.2f;
 
         // ---- Pot, soil, background ----
-        /// <summary>Trunk base (y = 0) sits this share of the way from the front to the back inner edge of the pot opening.</summary>
-        /// <remarks>PA-102Q (TD-041): 0.45 → 0.70 — the trunk base 6.3 units below the pot top (was 9.3): in the L2 reference the root crown
-        /// starts near the back rim, and BALANCE §1.4 counts heights from there; 1.0 (back inner edge) left the roots over the bare rim.</remarks>
-        public float TreeBaseInOpening = 0.70f;
+        /// <summary>⚑R BALANCE §1.5.1: the trunk base (y = 0) sits this many units below y_rim — the top of the pot sprite (row 1068 of the
+        /// reference, the zero of all AC heights). Replaces TreeBaseInOpening 0.70 (6.3 units, TD-041). Range 4.0–6.5.</summary>
+        public float TreeBaseBelowRimUnits = 4.5f; // PA-102R tuning (Proposed 5.0, range 4.0–6.5): TD-047
 
         /// <summary>Pot without an opening (fallback): soil ground line this high above the Pot Lip.</summary>
         public float SoilSurfaceY = 0.4f;

@@ -190,7 +190,7 @@ namespace PocketArbor.Domain.Growth
                 if (candidateCount == 0) break;
 
                 ShootDraws u = ShootDraws.Next(_rng);
-                double selectionSum = ComputeSelectionWeights(tree, species, shape.DomeWeightMultiplier, candidateCount);
+                double selectionSum = ComputeSelectionWeights(tree, species, in shape, candidateCount);
                 int parentIndex = PickParent(candidateCount, u.U1 * selectionSum);
                 if (parentIndex < 0) continue; // Σs = 0: the shoot burns, its 8 draws are spent (stream layout kept).
                 NodeData shoot = ShootBuilder.Build(tree, parentIndex, in u, cfg, species, in shape);
@@ -234,9 +234,11 @@ namespace PocketArbor.Domain.Growth
         /// (the crown axis too, but 0 while its apical delay lasts and both lateral slots are taken).
         /// BackBud_i = BackBudWeightMultiplier when BackBudDist ≤ BackBudRadiusEdges ∧ ord ≥ 1, else 1.
         /// ⚑Q §1.4.4: × DomeWeightMultiplier for the dome subtree (crown-axis nodes and all their descendants).
+        /// ⚑R §1.5.6: a crown-axis node with a free lateral slot takes DomeLateralWeight (instead of Pad / Interior), then × DomeWeightMultiplier.
         /// </summary>
-        double ComputeSelectionWeights(TreeGraph tree, SpeciesConfig species, double domeWeight, int candidateCount)
+        double ComputeSelectionWeights(TreeGraph tree, SpeciesConfig species, in ShapeParams shape, int candidateCount)
         {
+            double domeWeight = shape.DomeWeightMultiplier;
             GrowthConfig cfg = _config;
             ReadOnlySpan<NodeData> nodes = tree.Nodes;
             _shape.Analyze(nodes, TreeShapeAnalysis.Params(tree, cfg, species));
@@ -252,6 +254,7 @@ namespace PocketArbor.Domain.Growth
                 double role;
                 if (lateralOnly && !slotFree) role = 0.0;
                 else if (_shape.IsTrunkChain(i)) role = _shape.ApicalChild(i) < 0 && !lateralOnly ? cfg.ApicalDominanceWeight : cfg.TierWeight;
+                else if (slotFree && _shape.IsCrownAxis(i)) role = shape.DomeLateralWeight;
                 else role = _shape.InPad(i) ? cfg.PadWeight : cfg.InteriorWeight;
                 if (_shape.InDome(i)) role *= domeWeight;
                 if (!axis && _shape.BackBudDist(i) <= cfg.BackBudRadiusEdges) role *= cfg.BackBudWeightMultiplier;

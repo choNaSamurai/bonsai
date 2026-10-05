@@ -23,12 +23,12 @@ namespace PocketArbor.Domain.Tests.Growth
             var c = GrowthConfig.CreateDefault();
             Assert.DoesNotThrow(c.Validate);
             // Proposed values kept.
-            Assert.That(c.TrunkSegmentDecay, Is.InRange(0.72, 0.84), "⚑Q §1.4.8 range (Proposed 0.78)");
+            Assert.That(c.TrunkSegmentDecay, Is.InRange(0.80, 0.88), "⚑R §1.5.11 range");
             Assert.AreEqual(22.5, c.TrunkSegmentLength);
             Assert.AreEqual(0.08, c.TrunkSegmentJitter);
             Assert.AreEqual(0.88, c.TrunkSwayDecay);
             Assert.AreEqual(0.5, c.TrunkSwayBendGain);
-            Assert.That(c.TrunkBaseSwayRatio, Is.InRange(0.2, 0.5), "PA-102P range (Proposed 0.35)");
+            Assert.That(c.TrunkBaseSwayRatio, Is.InRange(0.30, 0.50), "⚑R §1.5.11 range (Proposed 0.40)");
             Assert.AreEqual(14, c.BackBudDays);
             Assert.AreEqual(2, c.BackBudRadiusEdges);
             Assert.AreEqual(0.23, c.BaseGrowthProbability, "AC17: tempo within ±15% without a change");
@@ -56,9 +56,9 @@ namespace PocketArbor.Domain.Tests.Growth
         }
 
         [Test]
-        public void GrowthRules_Version_IsThreeForPa102Q()
+        public void GrowthRules_Version_IsFourForPa102R()
         {
-            Assert.AreEqual(3, GrowthRules.Version, "ADR-0003 §8: 1 = PA-102S, 2 = PA-102P, 3 = PA-102Q");
+            Assert.AreEqual(4, GrowthRules.Version, "ADR-0003 §8: 1 = PA-102S, 2 = PA-102P, 3 = PA-102Q, 4 = PA-102R");
         }
 
         // ---- AC10: apical delay of the trunk --------------------------------------------------------------

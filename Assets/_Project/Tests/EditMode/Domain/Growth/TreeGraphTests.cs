@@ -44,12 +44,15 @@ namespace PocketArbor.Domain.Tests.Growth
             Assert.AreEqual(config.SaplingLeaderAgeDays, n[1].AgeDays);
             Assert.AreEqual(1f, n[1].LeafScale);
             // Leader = trunk segment k = 1 (BALANCE §1.3.1): θ_1 = −TierPhase·TrunkSwayDeg ± TrunkSwayJitterDeg (bendBias 0).
-            Assert.AreEqual(-tierPhase * species.TrunkSwayDeg * d2r, tree.WorldAngle(1), config.TrunkSwayJitterDeg * d2r + 1e-12);
-            Assert.LessOrEqual(Math.Abs(n[1].Curvature), config.TrunkCurvatureJitter);
+            // ⚑R §1.5.4(а) (conscious update): A_1 = TrunkSwayDeg·Profile[1]·(1 + Irregularity·h_1), h_1 = hash(seed, 1, "SWAY").
+            double a1Sapling = species.TrunkSwayDeg * species.TrunkSwayProfile.K1 * (1.0 + config.TrunkSwayIrregularity * ShootBuilder.SwayHash(1, 7u));
+            Assert.AreEqual(-tierPhase * a1Sapling * d2r, tree.WorldAngle(1), config.TrunkSwayJitterDeg * d2r + 1e-12);
+            // ⚑R §1.5.4(а): + the bow TierPhase·(−1)^1·TrunkBowCurvature (σ 1).
+            Assert.LessOrEqual(Math.Abs(n[1].Curvature + tierPhase * config.TrunkBowCurvature), config.TrunkCurvatureJitter + 1e-12);
             // ⚑P §1.3.1: segment k = 1 length TrunkSegmentLength·(1 ± TrunkSegmentJitter); #0 leans TierPhase·TrunkBaseSwayRatio·A_1.
             Assert.That(n[1].TargetLength, Is.InRange(config.TrunkSegmentLength * (1.0 - config.TrunkSegmentJitter) - 1e-12,
                 config.TrunkSegmentLength * (1.0 + config.TrunkSegmentJitter) + 1e-12));
-            Assert.AreEqual(tierPhase * config.TrunkBaseSwayRatio * species.TrunkSwayDeg * d2r, n[0].BaseAngle, 1e-12);
+            Assert.AreEqual(tierPhase * config.TrunkBaseSwayRatio * a1Sapling * d2r, n[0].BaseAngle, 1e-12);
             for (int i = 0; i < 3; i++) Assert.AreEqual(NodeData.NoCut, n[i].LastCutDay, "BALANCE §1.3.5: no cut yet");
 
             // Wild twig (BALANCE §1.2.8): slot 0 of #0, AttachT 0.30, side −TierPhase, world angle side·30°, Curvature 0.
@@ -82,7 +85,8 @@ namespace PocketArbor.Domain.Tests.Growth
             double d2r = GrowthFormulas.DegToRad;
             double lean = 0.5 * config.TrunkBendScaleDeg;
             // ⚑P BALANCE §1.3.1: A_1 = TrunkSwayDeg·(1 + TrunkSwayBendGain·|bendBias|); #0 = lean + TierPhase·TrunkBaseSwayRatio·A_1.
-            double a1 = species.TrunkSwayDeg * (1.0 + config.TrunkSwayBendGain * 0.5);
+            double a1 = species.TrunkSwayDeg * (1.0 + config.TrunkSwayBendGain * 0.5) * species.TrunkSwayProfile.K1
+                * (1.0 + config.TrunkSwayIrregularity * ShootBuilder.SwayHash(1, 1u)); // ⚑R §1.5.4(а)
             int tier = TreeShapeAnalysis.TierPhase(1u);
             Assert.AreEqual((lean + tier * config.TrunkBaseSwayRatio * a1) * d2r, tree.Nodes[0].BaseAngle, 1e-12);
             // θ_1 = lean + TierPhase·(−1)·A_1 ± jitter (seed 1 → TierPhase −1).

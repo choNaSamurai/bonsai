@@ -186,7 +186,8 @@ namespace PocketArbor.DevTools.Tests
             {
                 float z = PotFraming.Zoom(92f, 0f, new Rect(-30f, 0f, 60f, treeHeight));
                 Rect frame = PotFraming.FrameAt(z, 92f, 0f);
-                Assert.That(z, Is.InRange(PotFraming.ZoomMin, PotFraming.ZoomMax));
+                // ADR-0004 rev.5 (PA-102R AC20, conscious update): fitting wins over ZoomMax; ZoomHardMax 1.60 is the cap.
+                Assert.That(z, Is.InRange(PotFraming.ZoomMin, PotFraming.ZoomHardMax));
                 float potBottom = -(1290f - 1068f) / 1376f * (PotFraming.FrameAt(1f, 92f, 0f).height);
                 Assert.GreaterOrEqual(potBottom, frame.yMin, "pot bottom inside at z " + z);
                 Assert.GreaterOrEqual(frame.width * PotFraming.PotShareOfWidth / z, 91.9f);
@@ -216,8 +217,10 @@ namespace PocketArbor.DevTools.Tests
                             builder.Build(model.GetTree(day), mesh, model.Config, model.SpeciesConfig);
                             TestContext.Out.WriteLine(species + (styled ? " styled" : " wild") + " D" + day + ": taper " + builder.LastTaperRatio.ToString("0.00") + ", pads " + builder.LastPadCount);
                             Assert.GreaterOrEqual(builder.LastTaperRatio, 2.5f, species + " D" + day);
-                            float h = builder.LastHeight;
-                            float w06 = builder.TrunkWidthAtHeight(0.06f * h), w10 = builder.TrunkWidthAtHeight(0.10f * h);
+                            // ⚑R BALANCE §1.5.1 (conscious update): heights from y_rim, TreeBaseBelowRimUnits (5.0) above the trunk base.
+                            float rim = new TexturedStyleConfig().TreeBaseBelowRimUnits;
+                            float h = builder.LastHeight - rim;
+                            float w06 = builder.TrunkWidthAtHeight(rim + 0.06f * h), w10 = builder.TrunkWidthAtHeight(rim + 0.10f * h);
                             Assert.LessOrEqual(w06 / w10, 1.15f, species + " D" + day + ": flare ends below 0.06 H");
                             Assert.Greater(mesh.vertexCount, 0);
                         }

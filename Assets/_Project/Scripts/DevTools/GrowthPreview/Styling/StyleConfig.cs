@@ -31,6 +31,14 @@ namespace PocketArbor.DevTools.GrowthPreview
         /// <summary>S7: lateral axes of the crown axis (apex dome) keep this many nodes.</summary>
         public int StyleDomeLateralMax = 2;
 
+        /// <summary>⚑R BALANCE §1.5.3(в) S8: minimum gap (units) between the tip Y of two same-side adjacent pads; ≤ cuts per pair per pass.
+        /// Ranges 10–18 / 1–3.</summary>
+        public double StylePadGapUnits = 14.0;
+        public int StylePadGapCutsPerPass = 2;
+
+        /// <summary>S8 geometry: the preview's Bezier Curvature offset (TreeRenderConfig.CurvatureOffsetRatio).</summary>
+        public double CurvatureOffsetRatio = 0.25;
+
         public bool IsStyleDay(int day) =>
             day >= StyleStartDay && day <= StyleEndDay && StyleIntervalDays > 0 && (day - StyleStartDay) % StyleIntervalDays == 0;
 

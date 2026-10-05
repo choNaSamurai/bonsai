@@ -22,15 +22,15 @@ namespace PocketArbor.Domain.Tests.Growth
         [Test]
         public void GrowthConfig_Section14Defaults_WithinTuningRanges()
         {
+            // ⚑R PA-102R (conscious update): ranges of BALANCE §1.5.11 where §1.5 replaced §1.4.8 (slot0 #0, dome, crown axis, decay).
             var c = GrowthConfig.CreateDefault();
             Assert.DoesNotThrow(c.Validate);
-            Assert.That(c.TrunkSegmentDecay, Is.InRange(0.72, 0.84));
+            Assert.That(c.TrunkSegmentDecay, Is.InRange(0.80, 0.88));
             Assert.That(c.TrunkChainTaperRatio, Is.InRange(0.70, 0.82));
             Assert.That(c.TrunkChainDepthScaleFactor, Is.InRange(0.4, 0.7));
-            Assert.That(c.TrunkBaseSlotT0, Is.InRange(0.74, 0.82));
+            Assert.That(c.TrunkBaseSlotT0, Is.InRange(0.66, 0.76));
             Assert.That(c.PrimaryThicknessRatio, Is.InRange(0.32, 0.45));
-            Assert.That(c.PrimaryLengthFactor, Is.InRange(0.75, 0.95));
-            Assert.That(c.CrownAxisLengthFactor, Is.InRange(0.55, 0.80));
+            Assert.That(c.CrownAxisLengthFactor, Is.InRange(0.50, 0.70));
             Assert.That(c.CrownLateralLengthFactor, Is.InRange(1.0, 1.5));
             Assert.That(c.DomeWeightMultiplier, Is.InRange(1.5, 3.0));
             Assert.That(c.CrownLateralSlotT0, Is.InRange(0.45, 0.70));
@@ -48,6 +48,8 @@ namespace PocketArbor.Domain.Tests.Growth
             Assert.That(m.PrimaryAngleMeanDeg, Is.InRange(60.0, 72.0));
             Assert.That(m.CrownLateralAngleMeanDeg, Is.InRange(50.0, 68.0));
             Assert.That(k.PadDepth, Is.InRange(1, 2));
+            Assert.That(m.PrimaryLengthFactor, Is.InRange(0.75, 0.95));
+            Assert.That(k.PrimaryLengthFactor, Is.InRange(0.70, 0.90), "⚑R §1.5.7 Kuromatsu");
             Assert.IsNull(m.Style, "default species profile = Moyogi via the plain fields");
         }
 

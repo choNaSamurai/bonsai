@@ -77,6 +77,13 @@ namespace PocketArbor.DevTools.GrowthPreview
             public readonly float[] Yc = Fill(Pads), YcBase = Fill(Pads), Xc = Fill(Pads), W = Fill(Pads), H = Fill(Pads);
             public int BendChanges;
             public float BendRangeH;
+            /// <summary>⚑R §1.5.9 AC8: lobes of the deviation from the chord base → end k4 with amplitude ≥ 0.03 H; max/min amplitude.</summary>
+            public int BendDistinct;
+            public float BendRangeRim = float.NaN, BendInequality = float.NaN;
+            public readonly float[] ProfileBase = Fill(5);
+            public float RootStartH = float.NaN, RootStartMaskH = float.NaN;
+            public readonly List<float> RootThickness = new List<float>();
+            public int GapPairs = -1, GapPairsOk, GapFirstCuts, GapStuck;
             public float DomeWH, DomeHH;
             public readonly float[] Profile = Fill(5), ProfilePot = Fill(5);
             public float ProfileMonotone = float.NaN;
@@ -206,11 +213,18 @@ namespace PocketArbor.DevTools.GrowthPreview
                 controller.SetShapeStyle(ShapeStyle.Moyogi);
             }
 
+            Extra.Clear();
+            if (images)
+            {
+                FrameCheck(controller, camera, seeds, only);
+                CollarCheck(controller, camera, outDir);
+            }
+
             File.WriteAllText(Path.Combine(outDir, "components_fixture.txt"), components.ToString());
             File.WriteAllText(Path.Combine(outDir, "metrics.csv"), csv.ToString());
             string summary = Summarize(rows);
             File.WriteAllText(Path.Combine(outDir, "summary.txt"), summary);
-            Debug.Log("[PA-102Q metrics]\n" + summary);
+            Debug.Log("[PA-102R metrics]\n" + summary);
 
             if (images) CaptureImages(controller, camera, outDir);
             return rows;
@@ -233,6 +247,12 @@ namespace PocketArbor.DevTools.GrowthPreview
                     FoliageConfig.PuffRadiusScale = float.Parse(kv[1], Inv);
                     continue;
                 }
+                if (kv[0] == "PadRowSlopeMaxSide" || kv[0] == "PadSideMinSpanUnits")
+                {
+                    if (kv[0] == "PadRowSlopeMaxSide") FoliageConfig.RowSlopeMaxSideOverride = float.Parse(kv[1], Inv);
+                    else FoliageConfig.SideMinSpanOverride = float.Parse(kv[1], Inv);
+                    continue;
+                }
                 string field = kv[0];
                 string speciesOnly = null;
                 int dot = field.IndexOf('.');
@@ -240,6 +260,20 @@ namespace PocketArbor.DevTools.GrowthPreview
                 {
                     speciesOnly = field.Substring(0, dot);
                     field = field.Substring(dot + 1);
+                }
+                if (field == "TrunkSwayProfile")
+                {
+                    // "TrunkSwayProfile=1/1.3/0.9/0.6" (all species or "Momiji.TrunkSwayProfile=…").
+                    string[] k = kv[1].Split('/');
+                    var profile = new TrunkSwayProfile4(double.Parse(k[0], Inv), double.Parse(k[1], Inv), double.Parse(k[2], Inv), double.Parse(k[3], Inv));
+                    foreach (SpeciesId species in AllSpecies)
+                    {
+                        if (speciesOnly != null && species.ToString() != speciesOnly) continue;
+                        controller.SetSpecies(species);
+                        model.SpeciesConfig.TrunkSwayProfile = profile;
+                    }
+                    Debug.Log("[PA-102R metrics] override " + pair);
+                    continue;
                 }
                 bool done = speciesOnly == null && (Set(model.Config, field, kv[1]) | Set(model.Style, field, kv[1]) | Set(controller.Builder.Render, field, kv[1])
                     | Set(controller.Style, field, kv[1]));
@@ -258,7 +292,9 @@ namespace PocketArbor.DevTools.GrowthPreview
         {
             var f = target.GetType().GetField(field);
             if (f == null) return false;
-            object v = f.FieldType.IsEnum ? Enum.Parse(f.FieldType, value) : Convert.ChangeType(double.Parse(value, Inv), f.FieldType, Inv);
+            object v = f.FieldType.IsEnum ? Enum.Parse(f.FieldType, value)
+                : f.FieldType == typeof(bool) ? (object)(value == "1" || value == "true")
+                : Convert.ChangeType(double.Parse(value, Inv), f.FieldType, Inv);
             f.SetValue(target, v);
             return true;
         }
@@ -275,6 +311,16 @@ namespace PocketArbor.DevTools.GrowthPreview
 
             view.SetTreeOnly(true);
             Color32[] all = RenderPixels(camera, true);
+            bool[] noRoots = null;
+            if (day == 80)
+            {
+                // AC9: the same tree-only frame without the Nebari roots — where the roots start widening the bark silhouette.
+                builder.DebugSkipRoots = true;
+                view.Rebuild(controller.Model.GetTree(day), controller.Model, builder, controller.Art);
+                noRoots = Mask(RenderPixels(camera, true));
+                builder.DebugSkipRoots = false;
+                view.Rebuild(controller.Model.GetTree(day), controller.Model, builder, controller.Art);
+            }
             view.SetTreeOnly(true, showBark: false, showPads: true);
             Color32[] pads = RenderPixels(camera, true);
             view.SetTreeOnly(false);
@@ -297,22 +343,33 @@ namespace PocketArbor.DevTools.GrowthPreview
 
             float p = builder.LastPotWidth;
             float h = Mathf.Max(1e-3f, builder.LastHeight);
-            row.HP = builder.LastHeight / p;
-            row.WP = builder.LastCrownWidth / p;
             row.HModel = h;
-            row.Th0H = builder.LastTrunkBase / h;
-            row.FlareH = builder.LastTrunkBaseFlared / h;
+            row.WP = builder.LastCrownWidth / p;
             float upp = frame.width / FrameWidth;
             row.PotTopY = frame.yMax - PotTopPx * upp;
 
             TierStats(builder, out row.Tiers, out row.TiersAlternate);
             PadMetrics(builder, foliage, tree, frame, row);
+            // ⚑R BALANCE §1.5.1: every height from y_rim (the pot top row), H = top of the tree mask above it.
+            float hRim = Mathf.Max(1e-3f, row.HMask);
+            row.HP = hRim / p;
+            row.Th0H = builder.LastTrunkBase / hRim;
+            row.FlareH = builder.LastTrunkBaseFlared / hRim;
             row.IoU = row.Mirror ? mirror : direct;
             Bends(builder, h, out row.BendChanges, out row.BendRangeH);
+            DistinctBends(builder, hRim, out row.BendDistinct, out row.BendRangeRim, out row.BendInequality);
             Coverage(builder, foliage, frame, out row.Tips, out row.TipsCovered, out row.TwigSamples, out row.TwigOutside);
-            Profile(builder, row, h);
+            Profile(builder, row, h, tree, frame);
             Primaries(builder, row, h);
-            Roots(builder, seed, mossMask, frame, row);
+            Roots(builder, seed, mossMask, frame, row, tree, noRoots);
+            int[] gap = styled ? controller.Model.PadGapStats(day) : null;
+            if (gap != null)
+            {
+                row.GapPairs = gap[0];
+                row.GapPairsOk = gap[1];
+                row.GapFirstCuts = gap[2];
+                row.GapStuck = gap[3];
+            }
             return row;
         }
 
@@ -562,17 +619,24 @@ namespace PocketArbor.DevTools.GrowthPreview
 
         // ---- §1.4.0 trunk profile, primaries, roots ------------------------------------------------------
 
-        /// <summary>Mesh width of the trunk chain at f·H: Profile — heights from the trunk base y = 0 with H = LastHeight (the §1.4.1 arithmetic);
-        /// ProfilePot — heights f·H_mask above the pot top row (log); monotone share above 0.06 H (rise ≤ 2%).</summary>
-        static void Profile(TreePreviewMeshBuilder b, Row row, float h)
+        /// <summary>
+        /// ⚑R BALANCE §1.5.1 / §1.5.9 trunk profile, heights f·H above y_rim (H = mask top above y_rim): f ≤ 0.04 — width of the bark silhouette
+        /// row (tree mask, roots included) around the trunk axis; f ≥ 0.06 — trunk mesh width perpendicular to the axis (no roots, no collars).
+        /// ProfileBase — the PA-102Q variant (from the trunk base y = 0, H = model height, mesh only); ProfilePot — mesh only from y_rim (log).
+        /// Monotone share above 0.06 H (rise ≤ 2%).
+        /// </summary>
+        static void Profile(TreePreviewMeshBuilder b, Row row, float h, bool[] treeMask, Rect frame)
         {
+            float hRim = Mathf.Max(1e-3f, row.HMask);
             for (int k = 0; k < ProfileFractions.Length; k++)
             {
-                row.Profile[k] = b.TrunkWidthAtHeight(ProfileFractions[k] * h);
-                row.ProfilePot[k] = b.TrunkWidthAtHeight(row.PotTopY + ProfileFractions[k] * row.HMask);
+                float y = row.PotTopY + ProfileFractions[k] * hRim;
+                row.ProfileBase[k] = b.TrunkWidthAtHeight(ProfileFractions[k] * h);
+                row.ProfilePot[k] = b.TrunkWidthAtHeight(y);
+                row.Profile[k] = ProfileFractions[k] <= 0.04f ? SilhouetteWidth(b, treeMask, frame, y) : row.ProfilePot[k];
             }
             float top = b.TrunkChainTopY;
-            float y0 = 0.06f * h;
+            float y0 = row.PotTopY + 0.06f * hRim;
             if (top <= y0) return;
             const int steps = 64;
             int ok = 0, total = 0;
@@ -586,6 +650,37 @@ namespace PocketArbor.DevTools.GrowthPreview
                 previous = w;
             }
             row.ProfileMonotone = total > 0 ? ok / (float)total : float.NaN;
+        }
+
+        /// <summary>Width (units) of the run of the tree mask at world height <paramref name="y"/> that contains the trunk axis.</summary>
+        static float SilhouetteWidth(TreePreviewMeshBuilder b, bool[] mask, Rect frame, float y)
+        {
+            float cx = TrunkAxisX(b, y);
+            if (float.IsNaN(cx)) return float.NaN;
+            int py = Mathf.FloorToInt((y - frame.yMin) / frame.height * FrameHeight);
+            int px = Mathf.FloorToInt((cx - frame.xMin) / frame.width * FrameWidth);
+            if (py < 0 || py >= FrameHeight || px < 0 || px >= FrameWidth) return float.NaN;
+            int row = py * FrameWidth;
+            if (!mask[row + px]) return float.NaN;
+            int l = px, r = px;
+            while (l > 0 && mask[row + l - 1]) l--;
+            while (r < FrameWidth - 1 && mask[row + r + 1]) r++;
+            return (r - l + 1) * frame.width / FrameWidth;
+        }
+
+        /// <summary>x of the trunk-chain centre line at height <paramref name="y"/> (lowest crossing; NaN if none).</summary>
+        static float TrunkAxisX(TreePreviewMeshBuilder b, float y)
+        {
+            var axis = new List<Vector2>();
+            b.TrunkAxis(axis);
+            if (axis.Count > 0 && y <= axis[0].y) return axis[0].x;
+            for (int k = 1; k < axis.Count; k++)
+            {
+                Vector2 a = axis[k - 1], c = axis[k];
+                if ((a.y - y) * (c.y - y) > 0f || Mathf.Approximately(a.y, c.y)) continue;
+                return Mathf.Lerp(a.x, c.x, (y - a.y) / (c.y - a.y));
+            }
+            return float.NaN;
         }
 
         static void Primaries(TreePreviewMeshBuilder b, Row row, float h)
@@ -607,15 +702,23 @@ namespace PocketArbor.DevTools.GrowthPreview
             }
             if (lowest < float.MaxValue)
             {
-                row.LowestAttachH = lowest / h;
-                row.LowestAttachHPot = (lowest - row.PotTopY) / Mathf.Max(1f, row.HMask);
+                // ⚑R §1.5.1: AC from y_rim; LowestAttachHPot keeps the PA-102Q base-zero variant for the log.
+                row.LowestAttachH = (lowest - row.PotTopY) / Mathf.Max(1f, row.HMask);
+                row.LowestAttachHPot = lowest / h;
             }
         }
 
-        static void Roots(TreePreviewMeshBuilder b, uint seed, bool[] moss, Rect frame, Row row)
+        /// <summary>
+        /// Roots: count/sides, end ratio, visibility (32 centre-line points not under opaque moss), ⚑R §1.5.9 start above y_rim (model: the start of
+        /// the centre line on the #0 arc; mask: the highest row where the bark silhouette is wider than the trunk mesh by ≥ 2 px) and base
+        /// thickness / th0.
+        /// </summary>
+        static void Roots(TreePreviewMeshBuilder b, uint seed, bool[] moss, Rect frame, Row row, bool[] treeMask, bool[] noRootsMask)
         {
             row.Roots = b.LastRootCount;
             row.RootEndRatio = 1f;
+            float hRim = Mathf.Max(1e-3f, row.HMask);
+            float startTop = float.MinValue;
             var samples = new List<Vector3>();
             for (int r = 0; r < row.Roots; r++)
             {
@@ -624,6 +727,8 @@ namespace PocketArbor.DevTools.GrowthPreview
                 if (samples[samples.Count - 1].x < 0f) row.RootsLeft++;
                 else row.RootsRight++;
                 row.RootEndRatio = Mathf.Min(row.RootEndRatio, samples[samples.Count - 1].z / samples[0].z);
+                row.RootThickness.Add(samples[0].z / Mathf.Max(1e-3f, b.LastTrunkBase));
+                startTop = Mathf.Max(startTop, samples[0].y);
                 // Samples are uniform in arc length: 32 points by linear interpolation of the sample index.
                 int visible = 0;
                 for (int k = 0; k < RootPoints; k++)
@@ -634,6 +739,20 @@ namespace PocketArbor.DevTools.GrowthPreview
                     if (!Sample(moss, frame, point, 0)) visible++;
                 }
                 row.RootVisibility.Add(visible / (float)RootPoints);
+            }
+            if (row.Roots > 0) row.RootStartH = (startTop - row.PotTopY) / hRim;
+            if (noRootsMask == null) return;
+            float upp = frame.width / FrameWidth;
+            for (float y = row.PotTopY + 0.12f * hRim; y >= row.PotTopY; y -= upp)
+            {
+                float without = SilhouetteWidth(b, noRootsMask, frame, y);
+                float sil = SilhouetteWidth(b, treeMask, frame, y);
+                if (float.IsNaN(without) || float.IsNaN(sil)) continue;
+                if (sil - without >= 2f * upp)
+                {
+                    row.RootStartMaskH = (y - row.PotTopY) / hRim;
+                    break;
+                }
             }
         }
 
@@ -801,6 +920,64 @@ namespace PocketArbor.DevTools.GrowthPreview
             rangeH = (max - min) / h;
         }
 
+        /// <summary>
+        /// ⚑R BALANCE §1.5.9 AC8: 64 arc-uniform samples of the trunk-chain C1 axis; signed deviation from the chord base → end k4; the axis
+        /// splits into lobes between sign changes of the deviation; a lobe whose |max| ≥ 0.03 H is a «distinct bend». Range = (max − min)/H;
+        /// inequality = largest / smallest distinct amplitude (NaN with &lt; 2 distinct bends).
+        /// </summary>
+        public static void DistinctBends(TreePreviewMeshBuilder b, float h, out int distinct, out float rangeH, out float inequality)
+        {
+            distinct = 0;
+            rangeH = float.NaN;
+            inequality = float.NaN;
+            var dense = new List<Vector2>();
+            b.TrunkAxis(dense);
+            if (dense.Count < 3 || h <= 0f) return;
+            var arc = new float[dense.Count];
+            for (int i = 1; i < dense.Count; i++) arc[i] = arc[i - 1] + (dense[i] - dense[i - 1]).magnitude;
+            float total = arc[dense.Count - 1];
+            if (total <= 1e-3f) return;
+            var pts = new Vector2[BendSamples];
+            int j = 1;
+            for (int k = 0; k < BendSamples; k++)
+            {
+                float target = total * k / (BendSamples - 1);
+                while (j < dense.Count - 1 && arc[j] < target) j++;
+                float span = arc[j] - arc[j - 1];
+                pts[k] = Vector2.Lerp(dense[j - 1], dense[j], span > 1e-6f ? (target - arc[j - 1]) / span : 0f);
+            }
+            Vector2 chord = pts[BendSamples - 1] - pts[0];
+            Vector2 normal = new Vector2(-chord.y, chord.x).normalized;
+            float min = 0f, max = 0f, lobe = 0f, smallest = float.MaxValue, largest = 0f;
+            int lobeSign = 0, count = 0;
+            for (int k = 0; k < BendSamples; k++)
+            {
+                float d = Vector2.Dot(pts[k] - pts[0], normal);
+                min = Mathf.Min(min, d);
+                max = Mathf.Max(max, d);
+                int sg = d > 0f ? 1 : d < 0f ? -1 : 0;
+                if (sg != 0 && sg != lobeSign)
+                {
+                    Close(lobe);
+                    lobe = 0f;
+                    lobeSign = sg;
+                }
+                lobe = Mathf.Max(lobe, Mathf.Abs(d));
+            }
+            Close(lobe);
+            rangeH = (max - min) / h;
+            distinct = count;
+            if (count >= 2) inequality = largest / Mathf.Max(1e-4f, smallest);
+
+            void Close(float amplitude)
+            {
+                if (amplitude < 0.03f * h) return;
+                count++;
+                smallest = Mathf.Min(smallest, amplitude);
+                largest = Mathf.Max(largest, amplitude);
+            }
+        }
+
         /// <summary>AC7: tips of InPad nodes with LeafScale ≥ 0.5 inside the foliage mask; bark centre line of InPad ord ≥ 2 nodes
         /// (up to the trimmed end) outside the foliage mask dilated by 1 px.</summary>
         static void Coverage(TreePreviewMeshBuilder b, bool[] foliage, Rect frame, out int tips, out int covered, out int twigs, out int outside)
@@ -846,7 +1023,7 @@ namespace PocketArbor.DevTools.GrowthPreview
 
         static string CsvHeader()
         {
-            var sb = new StringBuilder("species,mode,style,seed,day,nodes,iou_log,iou_direct,iou_mirror,mirror,H_P,W_P,H_mask_P,th0_H,flare_H,tiers,tiers_alternate,"
+            var sb = new StringBuilder("species,mode,style,seed,day,nodes,iou_log,iou_direct,iou_mirror,mirror,H_P,W_P,H_model_base_P,th0_H,flare_H,tiers,tiers_alternate,"
                 + "foliage_components,laterals,yc_hits_005");
             for (int k = 0; k < Pads; k++)
             {
@@ -855,10 +1032,12 @@ namespace PocketArbor.DevTools.GrowthPreview
             }
             sb.Append(",dome_W_H,dome_H_H");
             foreach (float f in ProfileFractions) sb.Append(",w_").Append(f.ToString("0.00", Inv)).Append("H");
-            foreach (float f in ProfileFractions) sb.Append(",w_pot_").Append(f.ToString("0.00", Inv)).Append("H");
-            sb.Append(",profile_monotone,primary_min,primary_median,primary_max,lowest_attach_H,lowest_attach_H_pot,bend_sign_changes,bend_range_H,"
-                + "tips,tips_covered,twig_samples,twig_outside,roots,roots_left,roots_right,root_end_ratio,root_vis_median,root_vis_min,chord_deg,max_world_deg,"
-                + "lowest_tier_opposite,zoom\n");
+            foreach (float f in ProfileFractions) sb.Append(",w_mesh_rim_").Append(f.ToString("0.00", Inv)).Append("H");
+            foreach (float f in ProfileFractions) sb.Append(",w_base_").Append(f.ToString("0.00", Inv)).Append("H");
+            sb.Append(",profile_monotone,primary_min,primary_median,primary_max,lowest_attach_H,lowest_attach_H_base,bend_sign_changes,bend_range_H_base,"
+                + "bends_distinct,bend_range_H,bend_inequality,tips,tips_covered,twig_samples,twig_outside,roots,roots_left,roots_right,root_end_ratio,"
+                + "root_vis_median,root_vis_min,root_start_H,root_start_mask_H,root_thickness_min,root_thickness_max,gap_pairs,gap_pairs_ok,gap_first_node_cuts,"
+                + "chord_deg,max_world_deg,lowest_tier_opposite,zoom\n");
             return sb.ToString();
         }
 
@@ -866,7 +1045,7 @@ namespace PocketArbor.DevTools.GrowthPreview
         {
             csv.Append(r.Species).Append(',').Append(r.Styled ? "styled" : "wild").Append(',').Append(r.Style).Append(',').Append(r.Seed).Append(',')
                 .Append(r.Day).Append(',').Append(r.Nodes).Append(',').Append(F(r.IoU)).Append(',').Append(F(r.IoUDirect)).Append(',').Append(F(r.IoUMirror))
-                .Append(',').Append(r.Mirror ? "yes" : "no").Append(',').Append(F(r.HP)).Append(',').Append(F(r.WP)).Append(',').Append(F(r.HPMask))
+                .Append(',').Append(r.Mirror ? "yes" : "no").Append(',').Append(F(r.HP)).Append(',').Append(F(r.WP)).Append(',').Append(F(r.HModel / 92f))
                 .Append(',').Append(F(r.Th0H)).Append(',').Append(F(r.FlareH)).Append(',').Append(r.Tiers).Append(',').Append(r.TiersAlternate ? 1 : 0)
                 .Append(',').Append(r.FoliageComponents).Append(',').Append(r.Laterals).Append(',').Append(r.YcHits(0.05f));
             for (int k = 0; k < Pads; k++)
@@ -874,11 +1053,16 @@ namespace PocketArbor.DevTools.GrowthPreview
             csv.Append(',').Append(F(r.DomeWH)).Append(',').Append(F(r.DomeHH));
             foreach (float v in r.Profile) csv.Append(',').Append(F(v));
             foreach (float v in r.ProfilePot) csv.Append(',').Append(F(v));
+            foreach (float v in r.ProfileBase) csv.Append(',').Append(F(v));
             csv.Append(',').Append(F(r.ProfileMonotone)).Append(',').Append(F(r.PrimaryMin)).Append(',').Append(F(r.PrimaryMedian)).Append(',').Append(F(r.PrimaryMax))
                 .Append(',').Append(F(r.LowestAttachH)).Append(',').Append(F(r.LowestAttachHPot)).Append(',').Append(r.BendChanges).Append(',').Append(F(r.BendRangeH))
+                .Append(',').Append(r.BendDistinct).Append(',').Append(F(r.BendRangeRim)).Append(',').Append(F(r.BendInequality))
                 .Append(',').Append(r.Tips).Append(',').Append(r.TipsCovered).Append(',').Append(r.TwigSamples).Append(',').Append(r.TwigOutside)
                 .Append(',').Append(r.Roots).Append(',').Append(r.RootsLeft).Append(',').Append(r.RootsRight).Append(',').Append(F(r.RootEndRatio))
-                .Append(',').Append(F(r.RootVisMedian)).Append(',').Append(F(r.RootVisMin)).Append(',').Append(F(r.ChordDeg)).Append(',').Append(F(r.MaxWorldDeg))
+                .Append(',').Append(F(r.RootVisMedian)).Append(',').Append(F(r.RootVisMin)).Append(',').Append(F(r.RootStartH)).Append(',').Append(F(r.RootStartMaskH))
+                .Append(',').Append(F(MinOf(r.RootThickness))).Append(',').Append(F(-MinOf(r.RootThickness.ConvertAll(v => -v))))
+                .Append(',').Append(r.GapPairs).Append(',').Append(r.GapPairsOk).Append(',').Append(r.GapFirstCuts)
+                .Append(',').Append(F(r.ChordDeg)).Append(',').Append(F(r.MaxWorldDeg))
                 .Append(',').Append(r.LowestTierOpposite ? 1 : 0).Append(',').Append(F(r.Zoom)).Append('\n');
         }
 
@@ -886,11 +1070,14 @@ namespace PocketArbor.DevTools.GrowthPreview
 
         static bool In(float v, float lo, float hi) => !float.IsNaN(v) && v >= lo && v <= hi;
 
+        /// <summary>Extra lines (AC20 frame, AC21 collars) appended to summary.txt by <see cref="Run"/>.</summary>
+        static readonly StringBuilder Extra = new StringBuilder();
+
         static string Summarize(List<Row> rows)
         {
             var sb = new StringBuilder();
-            sb.Append("PA-102Q metrics (BALANCE §1.4.0). Median of seeds 1…N, fixture 20261004 in []. yc/H: zero = pot top row, H = mask top above it\n")
-              .Append("(as the TA masks); «base» = zero at the trunk base y = 0, H = model height. Profile: heights from y = 0, H = model height.\n\n");
+            sb.Append("PA-102R metrics (BALANCE §1.5, AC numbering of PA-102R). Median of seeds 1…N, fixture 20261004 in []. All heights from y_rim\n")
+              .Append("(pot top row 1068), H = top of the tree mask above y_rim; «base» columns = PA-102Q diagnostics (zero at the trunk base).\n\n");
             foreach (SpeciesId species in AllSpecies)
             {
                 foreach (bool styled in new[] { true, false })
@@ -917,14 +1104,42 @@ namespace PocketArbor.DevTools.GrowthPreview
                             if (c != null) r120.Add(c.HP / r80.HP);
                         }
                         float m20 = MedianOf(r20), m120 = MedianOf(r120);
-                        sb.AppendFormat(Inv, "AC9 tempo: H20/H80 {0:0.000} [0.55, 0.75] {1} · H120/H80 {2:0.000} [0.97, 1.08] {3}\n", m20, Ok(In(m20, 0.55f, 0.75f)),
+                        sb.AppendFormat(Inv, "AC10 tempo: H20/H80 {0:0.000} [0.55, 0.75] {1} · H120/H80 {2:0.000} [0.97, 1.08] {3}\n", m20, Ok(In(m20, 0.55f, 0.75f)),
                             m120, Ok(In(m120, 0.97f, 1.08f)));
+                        // AC4 / AC12: six separate laterals every day D80…D120; AC19 S8.
+                        var sixLine = new StringBuilder();
+                        bool sixAll = true;
+                        int pairs = 0, pairsOk = 0, firstCuts = 0, stuck = 0;
+                        foreach (int day in AcDays)
+                        {
+                            List<Row> seeds = mode.FindAll(r => r.Day == day && r.Seed != FixtureSeed);
+                            if (seeds.Count == 0) continue;
+                            int six = seeds.FindAll(r => r.Laterals == 6).Count;
+                            sixAll &= six >= (species == SpeciesId.Kuromatsu ? 0.7f : 0.8f) * seeds.Count;
+                            sixLine.Append(" D").Append(day).Append(' ').Append(six).Append('/').Append(seeds.Count);
+                            foreach (Row r in mode.FindAll(r => r.Day == day))
+                            {
+                                if (r.GapPairs < 0) continue;
+                                pairs += r.GapPairs;
+                                pairsOk += r.GapPairsOk;
+                                firstCuts += r.GapFirstCuts;
+                                stuck += r.GapStuck;
+                            }
+                        }
+                        sb.Append(species == SpeciesId.Kuromatsu ? "AC12 six separate laterals (≥ 70% each day):"
+                                : species == SpeciesId.Momiji ? "AC4 six separate laterals (≥ 80% each day):" : "(info, not an AC for Yamazakura) six separate laterals:")
+                            .Append(sixLine).Append(" → ").Append(species == SpeciesId.Yamazakura ? "info" : Ok(sixAll)).Append('\n');
+                        sb.AppendFormat(Inv, "AC19 S8 pairs gap ≥ StylePadGapUnits or limit used: {0}/{1} = {2:0.0}% (≥ 95%) {3} · first-node cuts {4} (= 0) {5} · "
+                            + "pairs with nothing S8 may cut (one-node tier) {6}; without them {7:0.0}%\n",
+                            pairsOk, pairs, 100f * pairsOk / Mathf.Max(1, pairs), Ok(pairsOk >= 0.95f * pairs), firstCuts, Ok(firstCuts == 0), stuck,
+                            100f * pairsOk / Mathf.Max(1, pairs - stuck));
                     }
                     else
                     {
                         List<Row> w80 = mode.FindAll(r => r.Day == 80 && r.Seed != FixtureSeed);
                         float hp = Median(w80, r => r.HP);
-                        sb.AppendFormat(Inv, "AC9 Wild H80/P {0:0.00} ≤ 1.9 {1}\n", hp, Ok(hp <= 1.9f));
+                        int tiersOk = w80.FindAll(r => r.Tiers >= 6 && r.Tiers <= 7).Count;
+                        sb.AppendFormat(Inv, "AC10 Wild H80/P {0:0.00} ≤ 1.9 {1} (tiers 6–7 at D80: {2}/{3})\n", hp, Ok(hp <= 1.9f), tiersOk, w80.Count);
                     }
                     sb.Append('\n');
                 }
@@ -933,7 +1148,7 @@ namespace PocketArbor.DevTools.GrowthPreview
             List<Row> styleRows = rows.FindAll(r => r.HMask == 0f && r.Species == SpeciesId.Momiji);
             if (styleRows.Count > 0)
             {
-                sb.Append("== AC20 styles (Momiji Styled D80, chord «base #0 → end k4» from vertical; sign changes of the chain curvature)\n");
+                sb.Append("== AC18 styles (Momiji Styled D80, chord «base #0 → end k4» from vertical; sign changes of the chain curvature)\n");
                 foreach (ShapeStyle style in new[] { ShapeStyle.Moyogi, ShapeStyle.Chokkan, ShapeStyle.Shakan })
                 {
                     List<Row> sr = styleRows.FindAll(r => r.Style == style && r.Seed != FixtureSeed);
@@ -941,21 +1156,22 @@ namespace PocketArbor.DevTools.GrowthPreview
                     if (sr.Count == 0) continue;
                     int n = sr.Count;
                     int chokkanOk = sr.FindAll(r => Mathf.Abs(r.ChordDeg) < 5f && r.BendChanges <= 1).Count;
-                    int shakanChord = sr.FindAll(r => Mathf.Abs(r.ChordDeg) >= 15f && Mathf.Abs(r.ChordDeg) <= 30f).Count;
+                    int shakanChord = sr.FindAll(r => Mathf.Abs(r.ChordDeg) >= 15f && Mathf.Abs(r.ChordDeg) <= 45f).Count;
                     int shakanTier = sr.FindAll(r => r.LowestTierOpposite).Count;
                     int under90 = sr.FindAll(r => r.MaxWorldDeg <= 90.01f).Count;
                     int bends2 = sr.FindAll(r => r.BendChanges >= 2).Count;
                     sb.AppendFormat(Inv, "{0,-8} |chord| median {1:0.0}° [fx {2:0.0}°] min {3:0.0}° max {4:0.0}° | bends median {5:0} [fx {6}] ≥2: {7}/{8} | "
-                        + "chord<5°∧≤1 change: {9}/{8} | chord 15–30°: {10}/{8} | lowest tier opposite: {11}/{8} | max|θ| ≤ 90°: {12}/{8} | H/P {13:0.00} W/P {14:0.00}",
+                        + "chord<5°∧≤1 change: {9}/{8} | chord 15–45°: {10}/{8} | lowest tier opposite: {11}/{8} | max|θ| ≤ 90°: {12}/{8} | H/P(model) {13:0.00} W/P {14:0.00}",
                         style, Median(sr, r => Mathf.Abs(r.ChordDeg)), fx != null ? Mathf.Abs(fx.ChordDeg) : float.NaN, MinOf(sr.ConvertAll(r => Mathf.Abs(r.ChordDeg))),
                         -MinOf(sr.ConvertAll(r => -Mathf.Abs(r.ChordDeg))), Median(sr, r => r.BendChanges), fx != null ? fx.BendChanges : -1, bends2, n,
                         chokkanOk, shakanChord, shakanTier, under90, Median(sr, r => r.HP), Median(sr, r => r.WP));
-                    if (style == ShapeStyle.Chokkan) sb.Append("  → AC20 Chokkan (≥ 90%) ").Append(Ok(chokkanOk >= 0.9f * n));
-                    if (style == ShapeStyle.Shakan) sb.Append("  → AC20 Shakan (100%) ").Append(Ok(shakanChord == n && shakanTier == n && under90 == n));
-                    if (style == ShapeStyle.Moyogi) sb.Append("  → bends ≥ 2 (100%) ").Append(Ok(bends2 == n));
+                    if (style == ShapeStyle.Chokkan) sb.Append("  → AC18 Chokkan (≥ 90%) ").Append(Ok(chokkanOk >= 0.9f * n));
+                    if (style == ShapeStyle.Shakan) sb.Append("  → AC18 Shakan (100%) ").Append(Ok(shakanChord == n && shakanTier == n && under90 == n));
+                    if (style == ShapeStyle.Moyogi) sb.Append("  → curvature sign changes ≥ 2 (100%) ").Append(Ok(bends2 == n));
                     sb.Append('\n');
                 }
             }
+            sb.Append(Extra);
             return sb.ToString();
         }
 
@@ -969,21 +1185,24 @@ namespace PocketArbor.DevTools.GrowthPreview
             float sizeTol = momiji ? 0.15f : 0.20f;
             int tiersOk = seeds.FindAll(r => r.Tiers >= (momiji ? 6 : 5) && r.Tiers <= 7).Count;
             int altOk = seeds.FindAll(r => r.TiersAlternate).Count;
-            int bendOk = seeds.FindAll(r => r.BendChanges >= 2).Count;
             int six = seeds.FindAll(r => r.Laterals == 6).Count;
             int hits6 = seeds.FindAll(r => r.YcHits(0.05f) >= 6).Count;
-            float hp = Median(seeds, r => r.HP), wp = Median(seeds, r => r.WP), th = Median(seeds, r => r.Th0H), hpm = Median(seeds, r => r.HPMask);
-            sb.AppendFormat(Inv, "D{0,3}: N {1:0} | H/P {2:0.00} [{3:0.00}] (mask {4:0.00}) W/P {5:0.00} [{6:0.00}] th0/H 1/{7:0.00} | tiers {8:0} [{9}] ok {10}/{11} alt {12}/{11} "
-                + "| comps {13:0} [{14}] six laterals {15}/{11} | bends {16:0} [{17}] ≥2 {18}/{11} range/H {19:0.000} | tips {20:0.0000} twigOut {21:0.0000} | IoU(log) {22:0.000} [{23:0.000}]\n",
-                day, Median(seeds, r => r.Nodes), hp, fx.HP, hpm, wp, fx.WP, 1f / Mathf.Max(1e-4f, th), Median(seeds, r => r.Tiers), fx.Tiers, tiersOk, n, altOk,
-                Median(seeds, r => r.FoliageComponents), fx.FoliageComponents, six, Median(seeds, r => r.BendChanges), fx.BendChanges, bendOk,
-                Median(seeds, r => r.BendRangeH), Sum(seeds, r => r.TipsCovered) / Mathf.Max(1f, Sum(seeds, r => r.Tips)),
+            int distinct2 = seeds.FindAll(r => r.BendDistinct >= 2).Count;
+            int unequal = seeds.FindAll(r => r.BendInequality >= 1.25f).Count;
+            float hp = Median(seeds, r => r.HP), wp = Median(seeds, r => r.WP), th = Median(seeds, r => r.Th0H);
+            sb.AppendFormat(Inv, "D{0,3}: N {1:0} | H/P {2:0.00} [{3:0.00}] W/P {4:0.00} [{5:0.00}] th0/H 1/{6:0.00} | tiers {7:0} [{8}] ok {9}/{10} alt {11}/{10} "
+                + "| comps {12:0} [{13}] six laterals {14}/{10} | bends distinct {15:0} [{16}] ≥2 {17}/{10} range/H {18:0.000} [{19:0.000}] unequal≥1.25 {20}/{10} "
+                + "| tips {21:0.0000} twigOut {22:0.0000} | IoU(log) {23:0.000} [{24:0.000}]\n",
+                day, Median(seeds, r => r.Nodes), hp, fx.HP, wp, fx.WP, 1f / Mathf.Max(1e-4f, th), Median(seeds, r => r.Tiers), fx.Tiers, tiersOk, n, altOk,
+                Median(seeds, r => r.FoliageComponents), fx.FoliageComponents, six, Median(seeds, r => r.BendDistinct), fx.BendDistinct, distinct2,
+                Median(seeds, r => r.BendRangeRim), fx.BendRangeRim, unequal,
+                Sum(seeds, r => r.TipsCovered) / Mathf.Max(1f, Sum(seeds, r => r.Tips)),
                 Sum(seeds, r => r.TwigOutside) / Mathf.Max(1f, Sum(seeds, r => r.TwigSamples)), Median(seeds, r => r.IoU), fx.IoU);
             if (!styled || day < 80) return;
 
-            // AC1–AC4 / AC12 pads.
+            // AC1–AC5 / AC12 pads.
             var line = new StringBuilder("      pad   yc/H med [fx] (ref)      | base-zero | xc med [fx] (ref)        | w med [fx] (ref)       | h med [fx] (ref)\n");
-            bool ac1 = true, ac2 = true, ac3 = true, ac1fx = fx.YcHits(0.05f) >= 6, ac2fx = true, ac3fx = true, hMin = true;
+            bool ac1 = true, ac2 = true, ac3 = true, ac1fx = fx.YcHits(0.05f) >= 6, ac2fx = true, ac3fx = true, hMin = true, wMin = true;
             float[] refW = fx.RefW, refH = fx.RefH;
             for (int k = 0; k < Pads; k++)
             {
@@ -998,60 +1217,84 @@ namespace PocketArbor.DevTools.GrowthPreview
                     ac3 &= Mathf.Abs(w / refW[k] - 1f) <= sizeTol && Mathf.Abs(h / refH[k] - 1f) <= sizeTol;
                     ac3fx &= Mathf.Abs(fx.W[k] / refW[k] - 1f) <= 0.20f && Mathf.Abs(fx.H[k] / refH[k] - 1f) <= 0.20f;
                     if (kuro && k < 4) hMin &= h >= 14f;
+                    if (kuro && k >= 4) wMin &= w >= 30f;
                 }
                 line.AppendFormat(Inv, "      {0,-4}  {1:0.000} [{2:0.000}] ({3:0.000}) | {4:0.000}     | {5,6:0.0} [{6,6:0.0}] ({7,6:0.0}) | {8:0.0} [{9:0.0}] ({10:0.0}) | {11:0.0} [{12:0.0}] ({13:0.0})\n",
                     k < 6 ? "#" + (k + 1) : "dome", yc, fx.Yc[k], RefYc[k], yb, xc, fx.Xc[k], RefXc[k], w, fx.W[k], refW[k], h, fx.H[k], refH[k]);
             }
+            float ratio61 = Median(seeds, r => r.W[5] / r.W[0]);
+            if (momiji) ac3 &= In(ratio61, 0.70f, 0.95f);
             float dw = Median(seeds, r => r.DomeWH), dh = Median(seeds, r => r.DomeHH);
-            bool ac4 = momiji ? In(dw, 0.40f, 0.54f) && In(dh, 0.21f, 0.28f) : kuro ? In(dw, 0.37f, 0.56f) && In(dh, 0.19f, 0.29f) : true;
-            bool ac4fx = Mathf.Abs(fx.DomeWH / RefDomeWH - 1f) <= 0.2f && Mathf.Abs(fx.DomeHH / RefDomeHH - 1f) <= 0.2f;
+            bool ac5 = momiji ? In(dw, 0.40f, 0.54f) && In(dh, 0.21f, 0.28f) : kuro ? In(dw, 0.37f, 0.56f) && In(dh, 0.19f, 0.29f) : true;
+            bool ac5fx = Mathf.Abs(fx.DomeWH / RefDomeWH - 1f) <= 0.2f && Mathf.Abs(fx.DomeHH / RefDomeHH - 1f) <= 0.2f;
             sb.Append(line);
-            sb.AppendFormat(Inv, "      AC1 yc ±{0:0.00}: {1} (≥6/7 within ±0.05: {2}/{3} ≥ 80% {4}; fixture {5}/7 {6}) | AC2 xc ±{7:0}: {8} (fixture ±6 {9}) | AC3 w,h ±{10:0}%: {11} (fixture ±20% {12}){13}\n",
-                ycTol, Ok(ac1), hits6, n, Ok(hits6 >= 0.8f * n), fx.YcHits(0.05f), Ok(ac1fx), xTol, Ok(ac2), Ok(ac2fx), sizeTol * 100f, Ok(ac3), Ok(ac3fx),
-                kuro ? " | h #1–#4 ≥ 14 " + Ok(hMin) : "");
-            sb.AppendFormat(Inv, "      AC4 dome∪#7 W/H {0:0.000} [{1:0.000}] H/H {2:0.000} [{3:0.000}]: {4} (fixture ±20% {5})\n", dw, fx.DomeWH, dh, fx.DomeHH, Ok(ac4), Ok(ac4fx));
+            sb.AppendFormat(Inv, "      AC1 yc ±{0:0.00}: {1} (≥6/7 within ±0.05: {2}/{3} ≥ 80% {4}; fixture {5}/7 {6}) | AC2 xc ±{7:0}: {8} (fixture ±6 {9}) | AC3 w,h ±{10:0}%"
+                + "{11}: {12} (fixture ±20% {13}){14}\n",
+                ycTol, Ok(ac1), hits6, n, Ok(hits6 >= 0.8f * n), fx.YcHits(0.05f), Ok(ac1fx), xTol, Ok(ac2), Ok(ac2fx), sizeTol * 100f,
+                momiji ? string.Format(Inv, ", w#6/w#1 {0:0.00} [0.70, 0.95]", ratio61) : "", Ok(ac3), Ok(ac3fx),
+                kuro ? " | h #1–#4 ≥ 14 " + Ok(hMin) + " | w #5/#6 ≥ 30 " + Ok(wMin) : "");
+            sb.AppendFormat(Inv, "      AC4 six laterals {0}/{1} | AC5 dome∪#7 W/H {2:0.000} [{3:0.000}] H/H {4:0.000} [{5:0.000}]: {6} (fixture ±20% {7})\n",
+                six, n, dw, fx.DomeWH, dh, fx.DomeHH, Ok(ac5), Ok(ac5fx));
 
-            // AC5 proportions.
+            // AC6 proportions.
             bool hpOk = momiji ? In(hp, 1.28f, 1.56f) : kuro ? In(hp, 1.19f, 1.60f) : In(hp, 1.42f * 0.85f, 1.42f * 1.15f);
-            bool wpOk = momiji ? In(wp, 1.04f, 1.27f) : kuro ? In(wp, 1.00f, 1.35f) : wp <= 1.33f;
+            bool wpOk = momiji ? In(wp, 1.04f, 1.27f) : kuro ? In(wp, 1.00f, 1.35f) : In(wp, 1.16f * 0.85f, 1.33f);
             bool thOk = day == 80 ? In(th, 1f / 9.35f, 1f / 7.73f) : th >= 1f / 9.35f;
-            sb.AppendFormat(Inv, "      AC5 H/P {0:0.00} {1} · W/P {2:0.00} {3} (fixture {4:0.00} ≤ 1.30 {5}) · th0/H 1/{6:0.00} {7}\n", hp, Ok(hpOk), wp, Ok(wpOk), fx.WP,
-                Ok(fx.WP <= 1.30f), 1f / th, Ok(thOk));
+            sb.AppendFormat(Inv, "      AC6 H/P {0:0.00} {1} · W/P {2:0.00} {3} (fixture H/P {4:0.00}, W/P {5:0.00} ≤ 1.30 {6}) · th0/H 1/{7:0.00} {8}\n", hp, Ok(hpOk), wp, Ok(wpOk),
+                fx.HP, fx.WP, Ok(fx.WP <= 1.30f), 1f / th, Ok(thOk));
 
-            // AC6 profile (D80), AC7 primaries, AC8 roots (D80).
-            float w10 = Median(seeds, r => r.Profile[2]);
-            float hm = Median(seeds, r => r.LastHeightProxy());
+            // AC7 profile (D80), AC10 primaries, AC8 bends, AC9 roots (D80).
             float r02 = Median(seeds, r => r.Profile[0] / r.Profile[2]), r06 = Median(seeds, r => r.Profile[1] / r.Profile[2]);
             float r30 = Median(seeds, r => r.Profile[3] / r.Profile[2]), r60 = Median(seeds, r => r.Profile[4] / r.Profile[2]);
-            float w10H = Median(seeds, r => r.Profile[2] / r.LastHeightProxy());
-            float mono = Median(seeds, r => r.ProfileMonotone);
+            float w10H = Median(seeds, r => r.Profile[2] / r.HMask);
             int monoAll = seeds.FindAll(r => r.ProfileMonotone >= 0.999f).Count;
             float lo30 = kuro ? 0.60f : 0.65f, hi30 = kuro ? 0.90f : 0.88f, lo60 = kuro ? 0.35f : 0.38f, hi60 = kuro ? 0.65f : 0.60f;
-            bool ac6 = In(w10H, 1f / 10.5f, 1f / 8f) && In(r02, 1.45f, 2.10f) && r06 <= (momiji ? 1.12f : 1.15f) && In(r30, lo30, hi30) && In(r60, lo60, hi60) && monoAll == n;
-            bool ac6fx = In(fx.Profile[2] / fx.LastHeightProxy(), 1f / 10.5f, 1f / 8f) && In(fx.Profile[0] / fx.Profile[2], 1.45f, 2.10f)
+            bool ac7 = In(w10H, 1f / 10.5f, 1f / 8f) && In(r02, 1.45f, 2.10f) && r06 <= (momiji ? 1.12f : 1.15f) && In(r30, lo30, hi30) && In(r60, lo60, hi60) && monoAll == n;
+            bool ac7fx = In(fx.Profile[2] / fx.HMask, 1f / 10.5f, 1f / 8f) && In(fx.Profile[0] / fx.Profile[2], 1.45f, 2.10f)
                 && fx.Profile[1] / fx.Profile[2] <= 1.15f && In(fx.Profile[3] / fx.Profile[2], lo30, hi30) && In(fx.Profile[4] / fx.Profile[2], lo60, hi60);
-            float rp02 = Median(seeds, r => r.ProfilePot[0] / r.ProfilePot[2]), rp06 = Median(seeds, r => r.ProfilePot[1] / r.ProfilePot[2]);
-            sb.AppendFormat(Inv, "      AC6 profile: w(0.10H)/H 1/{0:0.00} · w(.02)/w(.10) {1:0.00} · w(.06) {2:0.00} · w(.30) {3:0.00} · w(.60) {4:0.00} · monotone 100%: {5}/{6} → {7} (fixture {8})"
-                + " | pot-zero variant: w(.02)/w(.10) {9:0.00}, w(.06) {10:0.00}{11}\n",
-                1f / w10H, r02, r06, r30, r60, monoAll, n, day == 80 ? Ok(ac6) : "(info)", day == 80 ? Ok(ac6fx) : "-", rp02, rp06, float.IsNaN(hm) ? "" : "");
+            float b02 = Median(seeds, r => r.ProfileBase[0] / r.ProfileBase[2]), b06 = Median(seeds, r => r.ProfileBase[1] / r.ProfileBase[2]);
+            sb.AppendFormat(Inv, "      AC7 profile (y_rim): w(0.10H)/H 1/{0:0.00} · w(.02, silhouette)/w(.10) {1:0.00} · w(.06) {2:0.00} · w(.30) {3:0.00} · w(.60) {4:0.00} · monotone 100%: {5}/{6} → {7} (fixture {8} {9:0.00}/{10:0.00}/{11:0.00}/{12:0.00})"
+                + " | base-zero mesh: w(.02)/w(.10) {13:0.00}, w(.06) {14:0.00}\n",
+                1f / w10H, r02, r06, r30, r60, monoAll, n, day == 80 ? Ok(ac7) : "(info)", day == 80 ? Ok(ac7fx) : "-",
+                fx.Profile[0] / fx.Profile[2], fx.Profile[1] / fx.Profile[2], fx.Profile[3] / fx.Profile[2], fx.Profile[4] / fx.Profile[2], b02, b06);
+            float distinctMed = Median(seeds, r => r.BendDistinct), rangeMed = Median(seeds, r => r.BendRangeRim);
+            // Momiji: AC8; Kuromatsu (AC12) / Yamazakura (AC13): «distinct bends ≥ 2» (100% of seeds).
+            bool ac8 = momiji ? In(distinctMed, 2f, 4f) && distinct2 == n && In(rangeMed, 0.09f, 0.15f) && unequal >= 0.7f * n : distinct2 == n;
+            bool ac8fx = fx.BendDistinct >= 2 && (!momiji || fx.BendRangeRim >= 0.08f);
+            sb.AppendFormat(Inv, "      AC8 bends: distinct median {0:0} [2, 4] (≥ 2: {1}/{2}) · range median {3:0.000} H [0.09, 0.15] · inequality ≥ 1.25: {4}/{2} (≥ 70%) → {5} (fixture {6} bends, range {7:0.000}, ineq {8:0.00} {9})\n",
+                distinctMed, distinct2, n, rangeMed, unequal, Ok(ac8), fx.BendDistinct, fx.BendRangeRim, fx.BendInequality, Ok(ac8fx));
             int primEach = seeds.FindAll(r => r.PrimaryRatios.Count > 0 && r.PrimaryMin >= 0.28f && r.PrimaryMax <= 0.45f).Count;
             var allRatios = new List<float>();
             foreach (Row r in seeds) allRatios.AddRange(r.PrimaryRatios);
             float primMed = MedianOf(allRatios);
             float lowAttach = Median(seeds, r => r.LowestAttachH);
-            float lowAttachPot = Median(seeds, r => r.LowestAttachHPot);
-            bool ac7 = primEach == n && In(primMed, 0.32f, 0.40f) && In(lowAttach, 0.17f, 0.25f);
-            sb.AppendFormat(Inv, "      AC7 primaries base/trunk: median {0:0.000} [0.32, 0.40], min {1:0.000} max {2:0.000}, trees with all in [0.28, 0.45] {3}/{4} (fixture {5:0.000}…{6:0.000}) · lowest attach {7:0.000} H [0.17, 0.25] (pot-zero {8:0.000}) → {9}\n",
-                primMed, MinOf(allRatios), -MinOf(allRatios.ConvertAll(v => -v)), primEach, n, fx.PrimaryMin, fx.PrimaryMax, lowAttach, lowAttachPot, Ok(ac7));
+            float lowAttachBase = Median(seeds, r => r.LowestAttachHPot);
+            bool ac10p = primEach == n && In(primMed, 0.32f, 0.40f) && In(lowAttach, 0.17f, 0.25f);
+            float tips = Sum(seeds, r => r.TipsCovered) / Mathf.Max(1f, Sum(seeds, r => r.Tips));
+            float twigs = Sum(seeds, r => r.TwigOutside) / Mathf.Max(1f, Sum(seeds, r => r.TwigSamples));
+            bool ac10t = tips >= (momiji ? 0.995f : 0.99f) && twigs <= (momiji ? 0.005f : 0.01f);
+            sb.AppendFormat(Inv, "      AC10 primaries base/trunk: median {0:0.000} [0.32, 0.40], min {1:0.000} max {2:0.000}, all in [0.28, 0.45] {3}/{4} · lowest attach {5:0.000} H [0.17, 0.25] (base-zero {6:0.000}) → {7} · twigs {8} · tiers {9}/{4} {10}\n",
+                primMed, MinOf(allRatios), -MinOf(allRatios.ConvertAll(v => -v)), primEach, n, lowAttach, lowAttachBase, Ok(ac10p), Ok(ac10t), tiersOk,
+                Ok(tiersOk >= 0.9f * n && altOk == n));
             if (day == 80)
             {
                 var vis = new List<float>();
-                foreach (Row r in seeds) vis.AddRange(r.RootVisibility);
+                var thick = new List<float>();
+                foreach (Row r in seeds)
+                {
+                    vis.AddRange(r.RootVisibility);
+                    thick.AddRange(r.RootThickness);
+                }
                 float visMed = MedianOf(vis), visMin = MinOf(vis);
                 int visEach = vis.FindAll(v => v >= 0.5f).Count;
-                int rootsOk = seeds.FindAll(r => r.Roots == 7 && r.RootsLeft >= 2 && r.RootsRight >= 2 && r.RootEndRatio >= 0.449f).Count;
-                sb.AppendFormat(Inv, "      AC8 roots: visibility median {0:0.000} (≥ 0.65) min {1:0.000}, roots ≥ 0.50: {2}/{3} → {4} · count 7 / ≥2 per side / end ≥ 0.45: {5}/{6} [fixture {7} L{8}/R{9} end {10:0.00} vis {11:0.00}]\n",
-                    visMed, visMin, visEach, vis.Count, Ok(visMed >= 0.65f && visEach == vis.Count), rootsOk, n, fx.Roots, fx.RootsLeft, fx.RootsRight, fx.RootEndRatio, fx.RootVisMedian);
+                int thickEach = thick.FindAll(v => v >= 0.40f && v <= 0.58f).Count;
+                int rootsOk = seeds.FindAll(r => r.Roots == 7 && r.RootsLeft >= 2 && r.RootsRight >= 2).Count;
+                float start = Median(seeds, r => r.RootStartH), startMask = Median(seeds, r => r.RootStartMaskH);
+                int startOk = seeds.FindAll(r => In(r.RootStartH, 0.025f, 0.05f)).Count;
+                bool ac9 = startOk == n && thickEach == thick.Count && visMed >= 0.65f && visEach == vis.Count && rootsOk == n;
+                sb.AppendFormat(Inv, "      AC9 roots: start {0:0.000} H [0.025, 0.05] ({1}/{2}; mask emergence {3:0.000} H) · thickness/th0 {4:0.00}…{5:0.00} in [0.40, 0.58] {6}/{7} · visibility median {8:0.000} min {9:0.000} (≥ 0.50: {10}/{11}) · 7 / ≥2 per side {12}/{2} → {13} [fixture start {14:0.000} vis {15:0.00}]\n",
+                    start, startOk, n, startMask, MinOf(thick), -MinOf(thick.ConvertAll(v => -v)), thickEach, thick.Count, visMed, visMin, visEach, vis.Count, rootsOk,
+                    Ok(ac9), fx.RootStartH, fx.RootVisMedian);
             }
         }
 
@@ -1121,7 +1364,7 @@ namespace PocketArbor.DevTools.GrowthPreview
                     for (int d = 0; d < sheetDays.Length; d++)
                     {
                         controller.SetDay(sheetDays[d]);
-                        ReferenceFrame(controller, camera);
+                        FitFrame(controller, camera);
                         Color32[] full = RenderPixels(camera, false);
                         // Top row Styled, bottom row Wild (texture rows are bottom-up).
                         Blit(sheet, full, d * cellW, (1 - m) * cellH);
@@ -1133,15 +1376,25 @@ namespace PocketArbor.DevTools.GrowthPreview
             }
 
             controller.SetStyled(true);
+            Gallery(controller, camera, SpeciesId.Momiji, 80, Path.Combine(outDir, "gallery_momiji_styled_d80_seeds1-8.png"));
             StylesSheet(controller, camera, 100, Path.Combine(outDir, "styles_momiji.png"));
+            StylesSheet(controller, camera, 100, Path.Combine(outDir, "styles_momiji_rim.png"), true);
             StylesSheet(controller, camera, 80, Path.Combine(outDir, "styles_momiji_d80.png"));
             Compare(controller, camera, SpeciesId.Momiji, 80, PreviewArtLibrary.ReferencePath, Path.Combine(outDir, "compare_momiji.png"));
+            // Debug: bark-only render of the same frame (collars, roots, twist without pads).
+            controller.TexturedView.SetTreeOnly(true, showBark: true, showPads: false);
+            var barkOnly = new Texture2D(FrameWidth, FrameHeight, TextureFormat.RGBA32, false);
+            barkOnly.SetPixels32(RenderPixels(camera, true));
+            barkOnly.Apply();
+            File.WriteAllBytes(Path.Combine(outDir, "bark_only_momiji_d80.png"), barkOnly.EncodeToPNG());
+            UnityEngine.Object.DestroyImmediate(barkOnly);
+            controller.TexturedView.SetTreeOnly(false);
             Compare(controller, camera, SpeciesId.Momiji, 120, PreviewArtLibrary.ReferencePath, Path.Combine(outDir, "compare_momiji_d120.png"));
             Compare(controller, camera, SpeciesId.Kuromatsu, 80, NightReferencePath, Path.Combine(outDir, "compare_kuromatsu.png"));
         }
 
         /// <summary>AC20/AC21: Momiji Styled, fixture, Moyogi | Chokkan | Shakan side by side (full reference frames).</summary>
-        static void StylesSheet(GrowthPreviewController controller, Camera camera, int day, string outPath)
+        static void StylesSheet(GrowthPreviewController controller, Camera camera, int day, string outPath, bool referenceFrame = false)
         {
             controller.SetSpecies(SpeciesId.Momiji);
             controller.SetSeed(FixtureSeed);
@@ -1151,13 +1404,306 @@ namespace PocketArbor.DevTools.GrowthPreview
             {
                 controller.SetShapeStyle(styles[k]);
                 controller.SetDay(day);
-                ReferenceFrame(controller, camera);
+                if (referenceFrame) ReferenceFrame(controller, camera);
+                else FitFrame(controller, camera);
                 sheet.SetPixels32(k * FrameWidth, 0, FrameWidth, FrameHeight, RenderPixels(camera, false));
             }
             controller.SetShapeStyle(ShapeStyle.Moyogi);
             sheet.Apply();
             File.WriteAllBytes(outPath, sheet.EncodeToPNG());
             UnityEngine.Object.DestroyImmediate(sheet);
+        }
+
+        // ---- AC20: frame by the bounds of the whole tree (ADR-0004 rev.5) ------------------------------------
+
+        /// <summary>PNG frame: the pot frame (768×1376, pot centred) at the smallest z ≥ 1 that holds the vertex bounds of the bark (roots incl.) and
+        /// pad meshes + FrameMotionPadUnits with a 3% top margin — z = 1 (the PA-102Q / reference scale) whenever the tree fits.</summary>
+        static Rect FitFrame(GrowthPreviewController controller, Camera camera)
+        {
+            float potTop = controller.TexturedView.PotRect.yMax;
+            float p = controller.Builder.LastPotWidth;
+            float z = PotFraming.Zoom(p, potTop, controller.Builder.LastBounds, 1f, PotFraming.SideMargin);
+            Rect r = PotFraming.FrameAt(z, p, potTop);
+            camera.orthographic = true;
+            camera.orthographicSize = 0.5f * r.height;
+            camera.transform.position = new Vector3(r.center.x, r.center.y, -100f);
+            LastFitZoom = z;
+            return r;
+        }
+
+        static float LastFitZoom = 1f;
+
+        /// <summary>AC20: 30 seeds × 3 styles × D20/40/80/120 × 3 species (Styled): no pixel α ≥ 0.5 of the tree within 2% of the frame width from
+        /// the left, right and top edges of the fitted frame; zoom stays 1 for Moyogi / Chokkan where they fit.</summary>
+        static void FrameCheck(GrowthPreviewController controller, Camera camera, int seeds, string only)
+        {
+            int[] days = { 20, 40, 80, 120 };
+            int border = Mathf.CeilToInt(0.02f * FrameWidth);
+            controller.SetStyled(true);
+            Extra.Append("== AC20 frame (fitted pot frame, 2% = ").Append(border).Append(" px border, tree-only render, α ≥ 0.5)\n");
+            foreach (SpeciesId species in AllSpecies)
+            {
+                if (only != null && species.ToString() != only) continue;
+                controller.SetSpecies(species);
+                foreach (ShapeStyle style in new[] { ShapeStyle.Moyogi, ShapeStyle.Chokkan, ShapeStyle.Shakan })
+                {
+                    controller.SetShapeStyle(style);
+                    int frames = 0, touching = 0, zoomed = 0;
+                    float maxZoom = 1f;
+                    string firstFail = "";
+                    for (int s = 1; s <= seeds; s++)
+                    {
+                        controller.SetSeed((uint)s);
+                        foreach (int day in days)
+                        {
+                            controller.SetDay(day);
+                            FitFrame(controller, camera);
+                            controller.TexturedView.SetTreeOnly(true);
+                            Color32[] px = RenderPixels(camera, true);
+                            controller.TexturedView.SetTreeOnly(false);
+                            frames++;
+                            if (LastFitZoom > 1.0001f) zoomed++;
+                            maxZoom = Mathf.Max(maxZoom, LastFitZoom);
+                            if (TouchesBorder(px, border))
+                            {
+                                touching++;
+                                if (firstFail.Length == 0) firstFail = " first: seed " + s + " D" + day;
+                            }
+                        }
+                    }
+                    Extra.AppendFormat(Inv, "{0,-10} {1,-8} frames {2} · touching the 2% border {3} → {4} · zoomed out {5} (max z {6:0.00}){7}\n",
+                        species, style, frames, touching, Ok(touching == 0), zoomed, maxZoom, firstFail);
+                }
+            }
+            controller.SetShapeStyle(ShapeStyle.Moyogi);
+            Extra.Append('\n');
+        }
+
+        static bool TouchesBorder(Color32[] px, int border)
+        {
+            for (int y = 0; y < FrameHeight; y++)
+            {
+                int row = y * FrameWidth;
+                bool topBand = y >= FrameHeight - border;
+                for (int x = 0; x < FrameWidth; x++)
+                {
+                    if (!topBand && x >= border && x < FrameWidth - border) continue;
+                    if (px[row + x].a >= 128) return true;
+                }
+            }
+            return false;
+        }
+
+        // ---- AC21: collars without square patches -----------------------------------------------------------
+
+        /// <summary>
+        /// AC21 detector (fixture, Moyogi/Chokkan/Shakan × D80 × 3 species, every primary): bark-only render with and without the primary's
+        /// ribbon; «patch» = pixels inside the parent's silhouette deeper than CollarOverlapPx + 2 px from its edge whose colour the primary
+        /// changes (|ΔL| &gt; 0.03 or |Δα| &gt; 0.1) — any straight run of patch pixels longer than 3 px fails. Brightness step = mean luminance
+        /// of the primary 1.5…3.5 px outside the parent's edge vs the parent 3.5…6 px inside, ≤ 8%. Before (CollarLegacy) and after; crops →
+        /// collar_closeup.png.
+        /// </summary>
+        static void CollarCheck(GrowthPreviewController controller, Camera camera, string outDir)
+        {
+            TreePreviewMeshBuilder b = controller.Builder;
+            TexturedPreviewView view = controller.TexturedView;
+            const int cell = 192;
+            var crops = new List<Color32[]>[2] { new List<Color32[]>(), new List<Color32[]>() };
+            controller.SetStyled(true);
+            controller.SetSeed(FixtureSeed);
+            Extra.Append("== AC21 collars (fixture D80; patch = longest straight run of interior pixels changed by the primary; step = luminance jump at the collar edge on a flat-grey-bark render)\n");
+            for (int pass = 0; pass < 2; pass++)
+            {
+                bool legacy = pass == 0;
+                b.Render.CollarLegacy = legacy;
+                int junctions = 0, patchFails = 0, stepFails = 0;
+                var steps = new List<float>();
+                float worstRun = 0f, worstStep = 0f;
+                foreach (SpeciesId species in AllSpecies)
+                {
+                    controller.SetSpecies(species);
+                    foreach (ShapeStyle style in new[] { ShapeStyle.Moyogi, ShapeStyle.Chokkan, ShapeStyle.Shakan })
+                    {
+                        controller.SetShapeStyle(style);
+                        controller.SetDay(80);
+                        TreeGraph tree = controller.Model.GetTree(80);
+                        view.Rebuild(tree, controller.Model, b, controller.Art);
+                        Rect frame = ReferenceFrame(controller, camera);
+                        float upp = frame.width / FrameWidth;
+                        Color32[] full = RenderPixels(camera, false);
+                        view.SetTreeOnly(true, showBark: true, showPads: false);
+                        Color32[] withAll = RenderPixels(camera, true);
+                        // Shading-only render (flat mid-grey bark): the brightness step is measured without the bark texture's own contrast.
+                        view.BarkOverride = Grey;
+                        view.Rebuild(tree, controller.Model, b, controller.Art);
+                        Color32[] shading = RenderPixels(camera, true);
+                        view.BarkOverride = null;
+                        view.Rebuild(tree, controller.Model, b, controller.Art);
+                        view.SetTreeOnly(false);
+                        var primaries = new List<int>();
+                        for (int i = 1; i < b.NodeCount; i++) if (b.Shape.IsPrimary(i) && b.Node(i).Status != NodeStatus.Bud) primaries.Add(i);
+                        int cropped = 0;
+                        foreach (int i in primaries)
+                        {
+                            NodeData n = b.Node(i);
+                            int parent = n.ParentIndex;
+                            b.BaseWidths(i, out _, out float trunkWidth, out _);
+                            Vector2 attach = b.PointOn(parent, (float)n.AttachT);
+                            float half = 0.75f * trunkWidth;
+                            b.DebugSkipNodeId = n.Id;
+                            view.Rebuild(tree, controller.Model, b, controller.Art);
+                            view.SetTreeOnly(true, showBark: true, showPads: false);
+                            Color32[] without = RenderPixels(camera, true);
+                            view.SetTreeOnly(false);
+                            b.DebugSkipNodeId = -1;
+                            view.Rebuild(tree, controller.Model, b, controller.Art);
+
+                            float excl = (b.Render.CollarOverlapPx + 2f) * upp;
+                            int x0 = Mathf.FloorToInt((attach.x - half - frame.xMin) / upp), x1 = Mathf.CeilToInt((attach.x + half - frame.xMin) / upp);
+                            int y0 = Mathf.FloorToInt((attach.y - half - frame.yMin) / upp), y1 = Mathf.CeilToInt((attach.y + half - frame.yMin) / upp);
+                            int w = x1 - x0 + 1, h = y1 - y0 + 1;
+                            var patch = new bool[w * h];
+                            double outSum = 0, inSum = 0;
+                            int outN = 0, inN = 0;
+                            for (int py = y0; py <= y1; py++)
+                            {
+                                for (int px = x0; px <= x1; px++)
+                                {
+                                    if (px < 0 || py < 0 || px >= FrameWidth || py >= FrameHeight) continue;
+                                    int idx = py * FrameWidth + px;
+                                    var world = new Vector2(frame.xMin + (px + 0.5f) * upp, frame.yMin + (py + 0.5f) * upp);
+                                    float dParent = b.SilhouetteDistance(parent, world, out _);
+                                    Color32 a = withAll[idx], c = without[idx];
+                                    if (dParent < -excl && (Mathf.Abs(Lum(a) - Lum(c)) > 0.03f || Mathf.Abs(a.a - c.a) > 25)) patch[(py - y0) * w + (px - x0)] = true;
+                                    a = shading[idx];
+                                    if (a.a < 250) continue;
+                                    // The visible collar edge is at dParent = −CollarOverlapPx (PA-102Q: the ribbon start); bands of 3 px on both
+                                    // sides of it, within the primary's width away from its ink.
+                                    float edge = legacy ? 0f : -b.Render.CollarOverlapPx * upp;
+                                    float rel = dParent - edge;
+                                    if (Mathf.Abs(rel) > 3.5f * upp || Mathf.Abs(rel) < 0.5f * upp) continue;
+                                    float dLateral = b.SilhouetteDistance(i, world, out _);
+                                    if (dLateral > -(controller.Style.InkPx + 1f) * upp) continue;
+                                    if (rel > 0f) { outSum += Lum(a); outN++; }
+                                    else { inSum += Lum(a); inN++; }
+                                }
+                            }
+                            int run = LongestRun(patch, w, h);
+                            float step = outN > 0 && inN > 0 ? Mathf.Abs((float)(outSum / outN - inSum / inN)) / Mathf.Max(1e-3f, (float)(inSum / inN)) : float.NaN;
+                            junctions++;
+                            worstRun = Mathf.Max(worstRun, run);
+                            if (!float.IsNaN(step))
+                            {
+                                worstStep = Mathf.Max(worstStep, step);
+                                steps.Add(step);
+                            }
+                            if (run > 3) patchFails++;
+                            if (step > 0.08f) stepFails++;
+                            if (cropped < 2 && species == SpeciesId.Momiji)
+                            {
+                                crops[pass].Add(Crop(full, attach, 1.6f * trunkWidth, frame, cell));
+                                cropped++;
+                            }
+                        }
+                    }
+                }
+                Extra.AppendFormat(Inv, "{0}: junctions {1} · straight patch runs > 3 px: {2} (worst {3:0} px) → {4} · brightness step > 8%: {5} (median {8:0.0}%, worst {6:0.0}%) → {7}\n",
+                    legacy ? "before (PA-102Q collar)" : "after (PA-102R mask)  ", junctions, patchFails, worstRun, Ok(patchFails == 0), stepFails, 100f * worstStep,
+                    Ok(stepFails == 0), 100f * MedianOf(steps));
+            }
+            b.Render.CollarLegacy = false;
+            controller.SetShapeStyle(ShapeStyle.Moyogi);
+            Extra.Append('\n');
+
+            int cols = Mathf.Max(crops[0].Count, crops[1].Count);
+            if (cols == 0) return;
+            var sheet = new Texture2D(cell * cols, cell * 2, TextureFormat.RGBA32, false);
+            for (int r = 0; r < 2; r++)
+            {
+                for (int k = 0; k < crops[r].Count; k++) sheet.SetPixels32(k * cell, (1 - r) * cell, cell, cell, crops[r][k]); // top: before, bottom: after
+            }
+            sheet.Apply();
+            File.WriteAllBytes(Path.Combine(outDir, "collar_closeup.png"), sheet.EncodeToPNG());
+            UnityEngine.Object.DestroyImmediate(sheet);
+        }
+
+        static Texture2D _grey;
+
+        static Texture2D Grey
+        {
+            get
+            {
+                if (_grey != null) return _grey;
+                _grey = new Texture2D(4, 4, TextureFormat.RGBA32, false) { hideFlags = HideFlags.HideAndDontSave, wrapMode = TextureWrapMode.Repeat };
+                var px = new Color32[16];
+                for (int k = 0; k < 16; k++) px[k] = new Color32(160, 160, 160, 255);
+                _grey.SetPixels32(px);
+                _grey.Apply();
+                return _grey;
+            }
+        }
+
+        static float Lum(Color32 c) => (0.2126f * c.r + 0.7152f * c.g + 0.0722f * c.b) / 255f;
+
+        /// <summary>Longest run of set cells along rows, columns and both diagonals.</summary>
+        static int LongestRun(bool[] m, int w, int h)
+        {
+            int best = 0;
+            int[,] dirs = { { 1, 0 }, { 0, 1 }, { 1, 1 }, { 1, -1 } };
+            for (int d = 0; d < 4; d++)
+            {
+                int dx = dirs[d, 0], dy = dirs[d, 1];
+                for (int y = 0; y < h; y++)
+                {
+                    for (int x = 0; x < w; x++)
+                    {
+                        if (!m[y * w + x]) continue;
+                        int px = x - dx, py = y - dy;
+                        if (px >= 0 && py >= 0 && px < w && py < h && m[py * w + px]) continue; // not a run start
+                        int len = 0;
+                        for (int cx = x, cy = y; cx >= 0 && cy >= 0 && cx < w && cy < h && m[cy * w + cx]; cx += dx, cy += dy) len++;
+                        best = Math.Max(best, len);
+                    }
+                }
+            }
+            return best;
+        }
+
+        /// <summary>Square crop (side <paramref name="size"/> world units around <paramref name="center"/>) of a full frame, nearest-sampled to cell².</summary>
+        static Color32[] Crop(Color32[] full, Vector2 center, float size, Rect frame, int cell)
+        {
+            var outPx = new Color32[cell * cell];
+            float upp = frame.width / FrameWidth;
+            for (int y = 0; y < cell; y++)
+            {
+                for (int x = 0; x < cell; x++)
+                {
+                    float wx = center.x + ((x + 0.5f) / cell - 0.5f) * size, wy = center.y + ((y + 0.5f) / cell - 0.5f) * size;
+                    int px = Mathf.Clamp(Mathf.FloorToInt((wx - frame.xMin) / upp), 0, FrameWidth - 1);
+                    int py = Mathf.Clamp(Mathf.FloorToInt((wy - frame.yMin) / upp), 0, FrameHeight - 1);
+                    outPx[y * cell + x] = full[py * FrameWidth + px];
+                }
+            }
+            return outPx;
+        }
+
+        /// <summary>Seeds 1…8 of one species (Styled, reference frame, half size) — the spread around the medians, next to the single fixture.</summary>
+        static void Gallery(GrowthPreviewController controller, Camera camera, SpeciesId species, int day, string outPath)
+        {
+            const int cellW = FrameWidth / 2, cellH = FrameHeight / 2;
+            controller.SetSpecies(species);
+            var sheet = new Texture2D(cellW * 4, cellH * 2, TextureFormat.RGBA32, false);
+            for (int k = 0; k < 8; k++)
+            {
+                controller.SetSeed((uint)(k + 1));
+                controller.SetDay(day);
+                ReferenceFrame(controller, camera);
+                Blit(sheet, RenderPixels(camera, false), (k % 4) * cellW, (1 - k / 4) * cellH);
+            }
+            sheet.Apply();
+            File.WriteAllBytes(outPath, sheet.EncodeToPNG());
+            UnityEngine.Object.DestroyImmediate(sheet);
+            controller.SetSeed(FixtureSeed);
         }
 
         static void Blit(Texture2D sheet, Color32[] full, int x0, int y0)

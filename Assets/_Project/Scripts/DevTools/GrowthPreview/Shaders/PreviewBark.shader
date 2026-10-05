@@ -1,8 +1,12 @@
 // PA-103S style slice (DevTools only): painted bark along C1 ribbon strips (ADR-0004 §1 "Кора, UV").
 // Vertex stream (TreePreviewMeshBuilder.BuildTextured):
 //   TEXCOORD0 = (u01 across the ribbon: 0 on the +side edge, 1 on the −side edge; arc length along the axis, world units)
-//   TEXCOORD1 = (width in world units, barkAge 0 young … 1 trunk, ink factor 0…1, unused)
+//   TEXCOORD1 = (width in world units, barkAge 0 young … 1 trunk, ink factor 0…1, twist phase φ in bark tiles — PA-102R)
 //   TEXCOORD2 = unit side vector (world XY) that points towards the u01 = 0 edge
+//   TEXCOORD3 = PA-102R AC21 collar: (parent cylinder normal xy, signed distance outside the parent's silhouette in world units — 1e4 = none,
+//               light blend: ≥ 0 — the blend itself (0 = parent's normal … 1 = own); < 0 — −blend length: smoothstep(0, length, distance))
+//   TEXCOORD4 = (edge mask 0…1 — × ink and the AA fall-off of the nearest edge (roots' inner edge at the join, ADR-0004 rev.5);
+//               parent barkAge, blended to the own barkAge with the light blend)
 //   COLOR     = tint (linear)
 // Look: bark_trunk ↔ bark_young blend by barkAge, isotropic texel density (u scaled by width), fake cylinder light from the
 // upper left, thin dark ink outline along the ribbon edges, analytic edge AA (fwidth) instead of MSAA.
@@ -22,11 +26,15 @@ Shader "PocketArbor/DevTools/PreviewBark"
         _InkPx ("Ink width (px)", Float) = 1.6
         _InkMaxShare ("Max ink share of the ribbon width", Range(0, 0.5)) = 0.3
         _AAExpandPx ("Edge AA expansion (px)", Float) = 1
+        _BarkTwistShear ("Bark twist shear (u per tile of arc)", Float) = 0.3
+        _CollarOverlapPx ("Collar overlap inside the parent (px)", Float) = 3.2
     }
     SubShader
     {
         Tags { "RenderType" = "Transparent" "Queue" = "Transparent" "RenderPipeline" = "UniversalPipeline" "IgnoreProjector" = "True" }
-        Blend SrcAlpha OneMinusSrcAlpha
+        // PA-102R: separate alpha blend (over operator, outA = a + dstA·(1 − a)) — with the colour factors on alpha, partial coverage over an
+        // opaque layer left outA < 1 and the captured PNGs showed light seams / «patches» where ribbons overlap (AC21).
+        Blend SrcAlpha OneMinusSrcAlpha, One OneMinusSrcAlpha
         ZWrite Off
         Cull Off
 
@@ -53,6 +61,8 @@ Shader "PocketArbor/DevTools/PreviewBark"
                 float _InkPx;
                 float _InkMaxShare;
                 float _AAExpandPx;
+                float _BarkTwistShear;
+                float _CollarOverlapPx;
             CBUFFER_END
 
             struct Attributes
@@ -61,6 +71,8 @@ Shader "PocketArbor/DevTools/PreviewBark"
                 float2 uv0 : TEXCOORD0;
                 float4 uv1 : TEXCOORD1;
                 float2 uv2 : TEXCOORD2;
+                float4 uv3 : TEXCOORD3;
+                float2 uv4 : TEXCOORD4;
                 half4 color : COLOR;
             };
 
@@ -71,6 +83,8 @@ Shader "PocketArbor/DevTools/PreviewBark"
                 float s : TEXCOORD1;         // signed across: +1 at the side-vector edge, −1 at the other (beyond ±1 = AA fringe)
                 float2 side : TEXCOORD2;     // side vector (world)
                 half2 ageInk : TEXCOORD3;    // barkAge, ink factor
+                float4 collar : TEXCOORD4;   // parent normal xy, distance outside the parent, light blend
+                float2 mask : TEXCOORD5;     // edge mask
                 half4 color : COLOR;
             };
 
@@ -87,22 +101,30 @@ Shader "PocketArbor/DevTools/PreviewBark"
                 o.positionCS = TransformObjectToHClip(pos);
                 o.s = sgn * (1.0 + expand / (0.5 * width));
                 float tile = max(_BarkTileWorld, 1e-3);
-                o.barkUV = float2((0.5 - input.uv0.x) * width / tile, input.uv0.y / tile);
+                o.barkUV = float2((0.5 - input.uv0.x) * width / tile + _BarkTwistShear * input.uv1.w, input.uv0.y / tile);
                 o.side = input.uv2;
                 o.ageInk = half2(input.uv1.y, input.uv1.z);
                 o.color = input.color;
+                o.collar = input.uv3;
+                o.mask = input.uv4;
                 return o;
             }
 
             half4 Frag(Varyings i) : SV_Target
             {
+                // AC21: collar blend from the parent's light / bark age to the own over the blend length outside the parent's edge.
+                float blend = i.collar.w >= 0.0 ? saturate(i.collar.w) : smoothstep(0.0, max(-i.collar.w, 1e-4), i.collar.z);
+                half age = lerp(i.mask.y, i.ageInk.x, blend);
                 half3 trunk = SAMPLE_TEXTURE2D(_BarkTrunk, sampler_BarkTrunk, i.barkUV).rgb * _TrunkTint.rgb;
                 half3 young = SAMPLE_TEXTURE2D(_BarkYoung, sampler_BarkYoung, i.barkUV).rgb * _YoungTint.rgb;
-                half3 bark = lerp(young, trunk, saturate(i.ageInk.x)) * i.color.rgb;
+                half3 bark = lerp(young, trunk, saturate(age)) * i.color.rgb;
 
                 // Fake cylinder: the across coordinate becomes a normal bulging towards the viewer.
                 float s = clamp(i.s, -1.0, 1.0);
                 float3 n = float3(normalize(i.side + 1e-6) * s, sqrt(saturate(1.0 - s * s)));
+                // AC21: at the collar the light comes from the parent's cylinder normal (no brightness step at the junction).
+                float3 np = float3(i.collar.xy, sqrt(saturate(1.0 - dot(i.collar.xy, i.collar.xy))));
+                n = normalize(lerp(np, n, blend) + float3(0.0, 0.0, 1e-4));
                 float3 l = normalize(_LightDir.xyz);
                 half lambert = saturate(dot(n, l));
                 bark *= lerp(_ShadeDark, _ShadeLight, smoothstep(0.05, 0.95, lambert));
@@ -111,12 +133,19 @@ Shader "PocketArbor/DevTools/PreviewBark"
                 float ds = max(fwidth(i.s), 1e-5);
                 float edgePx = (1.0 - abs(i.s)) / ds;
                 float widthPx = 2.0 / ds;
-                half coverage = saturate(edgePx + 0.5);
+                half edgeMask = saturate(i.mask.x);
+                half coverage = lerp(1.0, saturate(edgePx + 0.5), edgeMask);
                 float inkW = min(_InkPx, _InkMaxShare * widthPx);
-                half ink = (1.0 - smoothstep(inkW - 0.6, inkW + 0.6, edgePx)) * _InkColor.a * i.ageInk.y;
+                // AC21: a lateral is transparent inside its parent except an overlap band that covers the parent's ink line; its own ink
+                // starts only outside the parent (no straight edges of the ribbon start inside the parent).
+                float pxWorld = unity_OrthoParams.w > 0.5 ? max(2.0 * unity_OrthoParams.y / max(_ScreenParams.y, 1.0), 1e-5) : 0.1;
+                float d = i.collar.z;
+                half collarAlpha = saturate((d + _CollarOverlapPx * pxWorld) / pxWorld + 0.5);
+                half collarInk = saturate(d / max(_InkPx * pxWorld, 1e-5));
+                half ink = (1.0 - smoothstep(inkW - 0.6, inkW + 0.6, edgePx)) * _InkColor.a * i.ageInk.y * edgeMask * collarInk;
                 bark = lerp(bark, _InkColor.rgb, ink);
 
-                return half4(bark, coverage * i.color.a);
+                return half4(bark, coverage * i.color.a * collarAlpha);
             }
             ENDHLSL
         }

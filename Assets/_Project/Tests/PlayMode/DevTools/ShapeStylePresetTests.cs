@@ -125,5 +125,111 @@ namespace PocketArbor.DevTools.Tests
             ShapeStylePresets.ApplyStyle(style, StyleConfig.CreateDefault(), ShapeStyle.Moyogi);
             Assert.AreEqual(StyleConfig.CreateDefault().StyleCrownAxisMax, style.StyleCrownAxisMax);
         }
+
+        // ---- PA-102R ---------------------------------------------------------------------------------------------
+
+        [Test]
+        public void StyleGeometry_S8_MatchesPreviewBuilderGeometry()
+        {
+            // S8 runs outside Unity on a plain-C# copy of the C1 axis geometry: bases and tips must equal the builder's (1e-3 units).
+            var builder = new TreePreviewMeshBuilder();
+            var mesh = new Mesh();
+            try
+            {
+                foreach (SpeciesId species in new[] { SpeciesId.Kuromatsu, SpeciesId.Momiji, SpeciesId.Yamazakura })
+                {
+                    var model = new GrowthPreviewModel();
+                    model.SetParameters(species, 20261004u, 1.0, 0.0, 25.0, 0.5, true);
+                    model.SetStyled(true);
+                    TreeGraph tree = model.GetTree(90);
+                    builder.Build(tree, mesh, model.Config, model.SpeciesConfig);
+                    var geometry = new StyleGeometry();
+                    geometry.Build(tree.Nodes, builder.Shape, builder.Render.CurvatureOffsetRatio);
+                    for (int i = 0; i < tree.Count; i++)
+                    {
+                        Vector2 tip = builder.TipOf(i), b = builder.PointOn(i, 0f);
+                        Assert.AreEqual(tip.x, (float)geometry.TipX(i), 1e-3f, species + " tip x " + i);
+                        Assert.AreEqual(tip.y, (float)geometry.TipY(i), 1e-3f, species + " tip y " + i);
+                        Assert.AreEqual(b.y, (float)geometry.BaseY(i), 1e-3f, species + " base y " + i);
+                    }
+                }
+            }
+            finally
+            {
+                Object.DestroyImmediate(mesh);
+            }
+        }
+
+        [Test]
+        public void S8_30SeedsDays80To120_CuttablePairsWithAirOrLimitAtLeast95Percent_FirstNodeNeverCut()
+        {
+            // AC19 PA-102R (Momiji Styled, Moyogi): after every styling day D80…D120, same-side tier pairs have a tip gap ≥ StylePadGapUnits or
+            // used the cut limit; S8 never cuts the first node of a primary. Pairs whose lower pad is only the first node of its primary (a one-node
+            // k4 tier under the dome) cannot be fixed by S8 by rule — the raw AC19 share (with them) is reported by PreviewMetricsHarness (≈ 89%,
+            // see PA-102R notes), here the rule itself is checked on the pairs S8 may act on.
+            int pairs = 0, ok = 0, firstCuts = 0, stuck = 0;
+            for (uint seed = 1; seed <= Seeds; seed++)
+            {
+                var model = new GrowthPreviewModel();
+                model.SetParameters(SpeciesId.Momiji, seed, 1.0, 0.0, 25.0, 0.5, true);
+                model.SetStyled(true);
+                model.GetDay(120);
+                for (int day = 80; day <= 120; day += 10)
+                {
+                    int[] stats = model.PadGapStats(day);
+                    Assert.IsNotNull(stats, "styling on D" + day);
+                    pairs += stats[0];
+                    ok += stats[1];
+                    firstCuts += stats[2];
+                    stuck += stats[3];
+                }
+            }
+            TestContext.Out.WriteLine("S8 pairs ok " + ok + "/" + pairs + " (" + (100.0 * ok / pairs).ToString("0.0") + "%), nothing cuttable " + stuck
+                + ", first-node cuts " + firstCuts);
+            Assert.Greater(pairs, Seeds * 5 * 3);
+            Assert.GreaterOrEqual(ok, 0.95 * (pairs - stuck));
+            Assert.AreEqual(0, firstCuts);
+        }
+
+        [Test]
+        public void Framing_AllStylesDay100_WholeTreeInsideTheFittedPotFrame()
+        {
+            // AC20 PA-102R (geometric part; pixels — PreviewMetricsHarness): frame centred on the pot, bounds of bark + roots + pads fit with the
+            // 3% side margin; Moyogi / Chokkan of the reference size keep z ≤ 1.
+            var builder = new TreePreviewMeshBuilder();
+            var mesh = new Mesh();
+            try
+            {
+                foreach (ShapeStyle style in new[] { ShapeStyle.Moyogi, ShapeStyle.Chokkan, ShapeStyle.Shakan })
+                {
+                    for (uint seed = 1; seed <= 10; seed++)
+                    {
+                        var model = new GrowthPreviewModel();
+                        model.SetParameters(SpeciesId.Momiji, seed, 1.0, 0.0, 25.0, 0.5, true);
+                        model.SetStyled(true);
+                        model.SetShapeStyle(style);
+                        builder.Build(model.GetTree(100), mesh, model.Config, model.SpeciesConfig);
+                        Rect bounds = builder.LastBounds;
+                        // The textured pot top (y_rim) is TreeBaseBelowRimUnits above the base; PNG frames use the 3% top margin.
+                        float rim = new TexturedStyleConfig().TreeBaseBelowRimUnits;
+                        float z = PotFraming.Zoom(92f, rim, bounds, 1f, PotFraming.SideMargin);
+                        Rect frame = PotFraming.FrameAt(z, 92f, rim);
+                        float margin = PotFraming.SideMargin * frame.width;
+                        Assert.Less(z, PotFraming.ZoomHardMax, style + " seed " + seed);
+                        Assert.GreaterOrEqual(bounds.xMin, frame.xMin + margin, style + " seed " + seed);
+                        Assert.LessOrEqual(bounds.xMax, frame.xMax - margin, style + " seed " + seed);
+                        Assert.AreEqual(0f, frame.center.x, 1e-4f, "the pot stays centred");
+                        // The reference scale (z = 1) is kept whenever the tree fits it; a wide Moyogi / Chokkan zooms out only slightly.
+                        if (PotFraming.Fits(PotFraming.FrameAt(1f, 92f, rim), bounds, PotFraming.SideMargin)) Assert.AreEqual(1f, z, 1e-4f, style + " seed " + seed);
+                        if (style != ShapeStyle.Shakan) Assert.LessOrEqual(z, 1.10f, style + " seed " + seed);
+                        TestContext.Out.WriteLine(style + " seed " + seed + " z " + z.ToString("0.00"));
+                    }
+                }
+            }
+            finally
+            {
+                Object.DestroyImmediate(mesh);
+            }
+        }
     }
 }

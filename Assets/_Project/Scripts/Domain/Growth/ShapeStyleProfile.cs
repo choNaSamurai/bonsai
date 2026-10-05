@@ -41,6 +41,16 @@ namespace PocketArbor.Domain.Growth
         public double CrownLateralLengthFactor = double.NaN;
         public double DomeWeightMultiplier = double.NaN;
 
+        // ⚑R BALANCE §1.5 (PA-102R): «Лінія стовбура» (profile, irregularity, bow — all × σ in the model), «Яруси», «Купол».
+        /// <summary>Amplitude profile k1…k4; NaN component = inherit the species component (ADR-0010 rev.2 §6).</summary>
+        public TrunkSwayProfile4 TrunkSwayProfile = TrunkSwayProfile4.Unset;
+        public double TrunkSwayIrregularity = double.NaN;
+        public double TrunkBowCurvature = double.NaN;
+        public double PadTierDecayCompensation = double.NaN;
+        public double PadLengthFactor = double.NaN;
+        public double PrimaryReachCompensation = double.NaN;
+        public double DomeLateralWeight = double.NaN;
+
         /// <summary>Default style (the L2 reference): σ 1, λ 0, jitter floor 0.1, no overrides.</summary>
         public static ShapeStyleProfile Moyogi() => new ShapeStyleProfile();
 
@@ -74,6 +84,14 @@ namespace PocketArbor.Domain.Growth
         public readonly double CrownLateralAngleSpreadDeg;
         public readonly double CrownLateralLengthFactor;
         public readonly double DomeWeightMultiplier;
+        /// <summary>⚑R §1.5.4(а): k1…k4 amplitude profile (style over species; NaN component → TrunkSwayDecay^(k−1)).</summary>
+        public readonly TrunkSwayProfile4 TrunkSwayProfile;
+        public readonly double TrunkSwayIrregularity;
+        public readonly double TrunkBowCurvature;
+        public readonly double PadTierDecayCompensation;
+        public readonly double PadLengthFactor;
+        public readonly double PrimaryReachCompensation;
+        public readonly double DomeLateralWeight;
 
         ShapeParams(GrowthConfig c, SpeciesConfig s, ShapeStyleProfile p)
         {
@@ -95,12 +113,38 @@ namespace PocketArbor.Domain.Growth
             PrimaryThicknessRatio = Pick(p?.PrimaryThicknessRatio, c.PrimaryThicknessRatio);
             PrimaryAngleMeanDeg = Pick(p?.PrimaryAngleMeanDeg, s.PrimaryAngleMeanDeg);
             PrimaryAngleSpreadDeg = Pick(p?.PrimaryAngleSpreadDeg, s.PrimaryAngleSpreadDeg);
-            PrimaryLengthFactor = Pick(p?.PrimaryLengthFactor, c.PrimaryLengthFactor);
+            PrimaryLengthFactor = Pick(p?.PrimaryLengthFactor, s.PrimaryLengthFactor);
             BranchDroop = Pick(p?.BranchDroop, s.BranchDroop);
             CrownLateralAngleMeanDeg = Pick(p?.CrownLateralAngleMeanDeg, s.CrownLateralAngleMeanDeg);
             CrownLateralAngleSpreadDeg = Pick(p?.CrownLateralAngleSpreadDeg, s.CrownLateralAngleSpreadDeg);
             CrownLateralLengthFactor = Pick(p?.CrownLateralLengthFactor, c.CrownLateralLengthFactor);
             DomeWeightMultiplier = Pick(p?.DomeWeightMultiplier, c.DomeWeightMultiplier);
+            TrunkSwayProfile = p != null ? p.TrunkSwayProfile.Over(in s.TrunkSwayProfile) : s.TrunkSwayProfile;
+            TrunkSwayIrregularity = GrowthFormulas.Clamp(Pick(p?.TrunkSwayIrregularity, c.TrunkSwayIrregularity), 0.0, MaxIrregularity);
+            TrunkBowCurvature = Pick(p?.TrunkBowCurvature, c.TrunkBowCurvature);
+            PadTierDecayCompensation = Pick(p?.PadTierDecayCompensation, s.PadTierDecayCompensation);
+            PadLengthFactor = Pick(p?.PadLengthFactor, c.PadLengthFactor);
+            PrimaryReachCompensation = Pick(p?.PrimaryReachCompensation, c.PrimaryReachCompensation);
+            DomeLateralWeight = Pick(p?.DomeLateralWeight, c.DomeLateralWeight);
+        }
+
+        /// <summary>|h_k|·Irregularity &lt; 1 keeps every A_k positive (alternation of the S-curve).</summary>
+        const double MaxIrregularity = 0.99;
+
+        /// <summary>⚑R §1.5.4(а) Profile[k] (k ≥ 1): component k of the profile; k &gt; 4 — K4 × TrunkSwayDecay^(k − 4); unset (NaN) —
+        /// TrunkSwayDecay^(k−1) (the PA-102Q rule). Allocation-free.</summary>
+        public double SwayProfileAt(int k)
+        {
+            if (k < 1) k = 1;
+            if (k <= TrunkSwayProfile4.Length)
+            {
+                double v = TrunkSwayProfile[k];
+                return double.IsNaN(v) || double.IsInfinity(v) ? System.Math.Pow(TrunkSwayDecay, k - 1) : v;
+            }
+            double last = TrunkSwayProfile.K4;
+            return double.IsNaN(last) || double.IsInfinity(last)
+                ? System.Math.Pow(TrunkSwayDecay, k - 1)
+                : last * System.Math.Pow(TrunkSwayDecay, k - TrunkSwayProfile4.Length);
         }
 
         public static ShapeParams Resolve(GrowthConfig config, SpeciesConfig species) => new ShapeParams(config, species, species.Style);

@@ -32,9 +32,13 @@ namespace PocketArbor.Domain.Tests.Growth
                 {
                     var tree = ShapeMetrics.Grow(sim, seed, species, 80);
                     var nodes = tree.Nodes;
+                    var shape = ShapeMetrics.Analyze(tree, config);
                     for (int i = 1; i < nodes.Length; i++)
                     {
                         double t = nodes[i].AttachT;
+                        // ⚑R §1.5.3(г) (conscious update): crown-axis laterals take slot 0 at CrownLateralSlotT0 (0.65).
+                        bool crownParent = nodes[i].BranchSide != 0 && shape.IsCrownAxis(nodes[i].ParentIndex);
+                        double s0 = crownParent ? config.CrownLateralSlotT0 : config.LateralSlotT0;
                         string at = species + " seed " + seed + " node " + i;
                         if (nodes[i].BranchSide == 0)
                         {
@@ -46,13 +50,13 @@ namespace PocketArbor.Domain.Tests.Growth
                         double slot0Min = config.TrunkBaseSlotT0 - config.AttachTJitter - 1e-9;
                         double slotBoundary = 0.5 * (config.TrunkBaseSlotT0 + config.TrunkBaseSlotT1);
                         if (nodes[i].ParentIndex == 0) Assert.That(t, Is.InRange(slot0Min, 0.97), at + " (#0 slots)");
-                        else Assert.IsTrue((t >= 0.41 && t <= 0.49) || (t >= 0.81 && t <= 0.89), at + " (slots 0.45 / 0.85): " + t);
+                        else Assert.IsTrue((t >= s0 - 0.04 - 1e-9 && t <= s0 + 0.04 + 1e-9) || (t >= 0.81 && t <= 0.89), at + " (slots " + s0 + " / 0.85): " + t);
                         for (int j = i + 1; j < nodes.Length; j++)
                         {
                             if (nodes[j].ParentIndex == nodes[i].ParentIndex && nodes[j].BranchSide != 0)
                             {
                                 // #0: slot gap 0.17 − 2·0.04 jitter = 0.09 (§1.4.1(в): «±0.04 does not cross the boundary 0.865»).
-                                double gap = nodes[i].ParentIndex == 0 ? 0.09 - 1e-9 : 0.17;
+                                double gap = nodes[i].ParentIndex == 0 ? 0.09 - 1e-9 : config.LateralSlotT1 - s0 - 2.0 * config.AttachTJitter - 1e-9;
                                 Assert.GreaterOrEqual(Math.Abs(nodes[j].AttachT - t), gap, at + " vs sibling " + j);
                                 if (nodes[i].ParentIndex == 0) Assert.AreNotEqual(t < slotBoundary, nodes[j].AttachT < slotBoundary, at + " one per #0 slot");
                             }
@@ -278,19 +282,24 @@ namespace PocketArbor.Domain.Tests.Growth
         {
             // PA-102P AC9: chain k ≥ 1 = TrunkSegmentLength·Decay^(k−1); crown axis ×1.2×CrownAxisLengthFactor;
             // branch continuations ×BranchApicalLengthMultiplier×0.7^min(ordEff,2); laterals ×0.7^min(ordEff,2). Exact (1e-12).
+            // ⚑R PA-102R (conscious update): nodes of a primary's subtree except its first node — exponent (d − 1) − c·k_t and × PadLengthFactor
+            // (§1.5.2 а); the first node of a primary — reach compensation (§1.5.4 б), recomputed here independently of ShootBuilder.
             var config = Config();
             config.ShootLengthJitter = 0.0;
             config.TrunkSegmentJitter = 0.0;
             var sim = ShapeMetrics.Simulator(config);
             foreach (SpeciesId species in AllSpecies)
             {
+                var speciesConfig = SpeciesConfig.CreateDefault(species);
                 var tree = ShapeMetrics.Grow(sim, GrowthTestKit.FixtureSeed, species, 120);
                 var shape = ShapeMetrics.Analyze(tree, config);
-                int crown = 0, continuations = 0;
+                int crown = 0, continuations = 0, padNodes = 0, primaries = 0;
                 for (int i = 1; i < tree.Count; i++)
                 {
                     NodeData n = tree.Nodes[i];
-                    double baseLength = config.ShootBaseLength * Math.Pow(config.ShootLengthDecay, n.Depth - 1);
+                    int tier = PadTier(tree, shape, i, config);
+                    double exponent = tier >= 0 ? n.Depth - 1 - speciesConfig.PadTierDecayCompensation * tier : n.Depth - 1;
+                    double baseLength = config.ShootBaseLength * Math.Pow(config.ShootLengthDecay, exponent) * (tier >= 0 ? config.PadLengthFactor : 1.0);
                     double orderFactor = Math.Pow(config.OrderLengthFactor, Math.Min(shape.EffectiveOrder(i), 2));
                     double expected;
                     if (shape.IsTrunkChain(i)) expected = config.TrunkSegmentLength * Math.Pow(config.TrunkSegmentDecay, n.Depth - 1);
@@ -301,27 +310,70 @@ namespace PocketArbor.Domain.Tests.Growth
                     }
                     else if (n.BranchSide == 0)
                     {
-                        expected = baseLength * config.BranchApicalLengthMultiplier * orderFactor * AxisLengthFactor(tree, shape, i, config);
+                        expected = baseLength * config.BranchApicalLengthMultiplier * orderFactor * AxisLengthFactor(tree, shape, i, config, speciesConfig);
                         continuations++;
                     }
-                    else expected = baseLength * orderFactor * AxisLengthFactor(tree, shape, i, config);
-                    Assert.AreEqual(expected, n.TargetLength, 1e-12, species + " node " + i);
+                    else
+                    {
+                        expected = baseLength * orderFactor * AxisLengthFactor(tree, shape, i, config, speciesConfig);
+                        if (shape.IsPrimary(i))
+                        {
+                            expected = ReachCompensated(tree, i, expected, config);
+                            primaries++;
+                        }
+                    }
+                    if (tier >= 0) padNodes++;
+                    Assert.AreEqual(expected, n.TargetLength, 1e-9, species + " node " + i);
                 }
                 Assert.AreEqual(config.TrunkTargetLength, tree.Nodes[0].TargetLength);
                 Assert.Greater(crown, 0, species + ": crown axis exists by D120");
                 Assert.Greater(continuations, 10, species.ToString());
+                Assert.Greater(padNodes, 20, species + ": primary subtrees exist");
+                Assert.Greater(primaries, 4, species.ToString());
             }
         }
 
-        /// <summary>⚑Q BALANCE §1.4.3 / §1.4.4 (AC14): PrimaryLengthFactor on every ord-1 node of an axis rooted on the chain,
+        /// <summary>⚑Q BALANCE §1.4.3 / §1.4.4 (AC14): PrimaryLengthFactor (⚑R §1.5.7: per species) on every ord-1 node of an axis rooted on the chain,
         /// CrownLateralLengthFactor on every ord-1 node of an axis rooted on the crown axis, 1 otherwise (ord ≥ 2 included).</summary>
-        static double AxisLengthFactor(TreeGraph tree, TreeShapeAnalysis shape, int i, GrowthConfig config)
+        static double AxisLengthFactor(TreeGraph tree, TreeShapeAnalysis shape, int i, GrowthConfig config, SpeciesConfig species)
         {
             if (shape.Order(i) != 1) return 1.0;
             int root = i;
             while (tree.Nodes[root].BranchSide == 0) root = tree.Nodes[root].ParentIndex;
             int p = tree.Nodes[root].ParentIndex;
-            return shape.IsTrunkChain(p) ? config.PrimaryLengthFactor : config.CrownLateralLengthFactor;
+            return shape.IsTrunkChain(p) ? species.PrimaryLengthFactor : config.CrownLateralLengthFactor;
+        }
+
+        /// <summary>⚑R §1.5.2(а): k_t = Depth of the chain node a primary sits on, for nodes of its subtree except the primary itself; −1 otherwise.</summary>
+        static int PadTier(TreeGraph tree, TreeShapeAnalysis shape, int i, GrowthConfig config)
+        {
+            if (shape.Order(i) == 0 || shape.IsPrimary(i)) return -1;
+            int top = -1;
+            for (int j = i; j > 0; j = tree.Nodes[j].ParentIndex) if (tree.Nodes[j].BranchSide != 0) top = j;
+            int p = tree.Nodes[top].ParentIndex;
+            return shape.IsTrunkChain(p) ? tree.Nodes[p].Depth : -1;
+        }
+
+        /// <summary>⚑R §1.5.4(б), independent: L' = clamp(L − g·o / max(|sin θ_p|, 0.5), 0.6L, 1.4L), o = −side·(x_attach − x_lean(y_attach)).</summary>
+        static double ReachCompensated(TreeGraph tree, int i, double length, GrowthConfig config)
+        {
+            NodeData n = tree.Nodes[i];
+            double x = 0.0, y = 0.0;
+            // Chain from #0 to the parent (TargetLength, world angles, no curvature), then AttachT along the parent.
+            var chain = new List<int>();
+            for (int j = n.ParentIndex; j >= 0; j = tree.Nodes[j].ParentIndex) chain.Insert(0, j);
+            for (int c = 0; c < chain.Count; c++)
+            {
+                int j = chain[c];
+                double f = c == chain.Count - 1 ? n.AttachT : 1.0;
+                double w = tree.WorldAngle(j);
+                x += -f * tree.Nodes[j].TargetLength * Math.Sin(w);
+                y += f * tree.Nodes[j].TargetLength * Math.Cos(w);
+            }
+            double lean = tree.Genome.BendBias * config.TrunkBendScaleDeg * GrowthFormulas.DegToRad;
+            double o = -n.BranchSide * (x - (-y * Math.Tan(lean)));
+            double sin = Math.Max(Math.Abs(Math.Sin(tree.WorldAngle(i))), 0.5);
+            return Math.Min(Math.Max(length - config.PrimaryReachCompensation * o / sin, 0.6 * length), 1.4 * length);
         }
 
         [Test]

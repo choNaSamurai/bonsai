@@ -58,6 +58,8 @@ namespace PocketArbor.DevTools.GrowthPreview
         float _flare;
         float _puffRadius;
         int _chainTopDepth;
+        float _swayScale = 1f;
+        int _tierPhase = 1;
 
         public TreeRenderConfig Render => _render;
 
@@ -151,8 +153,12 @@ namespace PocketArbor.DevTools.GrowthPreview
         /// <summary>PA-102S proportions (last build, units): tree height above the Pot Lip incl. foliage.</summary>
         public float LastHeight { get; private set; }
 
-        /// <summary>Bark + foliage extents (roots and pot excluded) of the last build — camera framing (TD-030).</summary>
+        /// <summary>Bark + foliage extents (roots and pot excluded, y from 0) of the last build (PA-102Q metrics).</summary>
         public Rect LastTreeRect { get; private set; }
+
+        /// <summary>ADR-0004 rev.5 / AC20: min/max of every written vertex of the bark mesh (trunk, flare, roots, collars) and of the pad mesh
+        /// (sprites, shadow underlays, tip sprites) — the camera frame bounds (pot excluded).</summary>
+        public Rect LastBounds { get; private set; }
 
         /// <summary>Crown width: x-extent of bark + foliage (roots and pot excluded).</summary>
         public float LastCrownWidth { get; private set; }
@@ -195,6 +201,7 @@ namespace PocketArbor.DevTools.GrowthPreview
             AddRect(new Vector2(-potWidth * 0.5f - PotLipOverhang, -PotLipThickness * 2f), new Vector2(potWidth * 0.5f + PotLipOverhang, 0f), PotLip);
             AddRect(new Vector2(-potWidth * 0.5f + 1.5f, -0.6f), new Vector2(potWidth * 0.5f - 1.5f, 1.2f), Soil);
 
+            int rootStart = _vertices.Count;
             AddNebariRoots(tree.Genome.Seed, growth);
             int treeStart = _vertices.Count;
             _trunkSamples.Clear();
@@ -219,6 +226,15 @@ namespace PocketArbor.DevTools.GrowthPreview
             LastHeight = maxY;
             LastCrownWidth = maxX > minX ? maxX - minX : 0f;
             LastTreeRect = maxX > minX ? Rect.MinMaxRect(minX, 0f, maxX, maxY) : new Rect(0f, 0f, 0f, 0f);
+            float bMinY = float.MaxValue;
+            for (int v = rootStart; v < _vertices.Count; v++)
+            {
+                Vector3 p = _vertices[v];
+                minX = Mathf.Min(minX, p.x);
+                maxX = Mathf.Max(maxX, p.x);
+                bMinY = Mathf.Min(bMinY, p.y);
+            }
+            LastBounds = maxX > minX ? Rect.MinMaxRect(minX, bMinY, maxX, maxY) : new Rect(0f, 0f, 0f, 0f);
             LastTrunkBase = _th0;
             LastTrunkBaseFlared = _th0 * (1f + _flare);
 
@@ -247,6 +263,9 @@ namespace PocketArbor.DevTools.GrowthPreview
                 * Mathf.Clamp01(flareRange > 0f ? (_th0 - (float)growth.TrunkInitialThickness) / flareRange : 0f);
 
             ComputeGeometry();
+            // ⚑R §1.5.4(в): bark twist × σ, sign TierPhase·(−1)^k.
+            _swayScale = (float)ShapeParams.Resolve(growth, species).SwayScale;
+            _tierPhase = TreeShapeAnalysis.TierPhase(tree.Genome.Seed);
             FoliageConfig foliage = FoliageConfig.For(tree.Genome.Species);
             _puffRadius = foliage.PuffRadius;
             _chainTopDepth = 0;
@@ -292,6 +311,19 @@ namespace PocketArbor.DevTools.GrowthPreview
                 else _base[i] = Eval(parent, (float)_nodes[i].AttachT);
                 _tip[i] = _base[i] + _dir[i] * (float)_nodes[i].Length;
             }
+        }
+
+        /// <summary>
+        /// Unit tangent of node <paramref name="i"/>'s curve at <paramref name="t"/>: the exact joint tangents at the ends (t = 0 → the base tangent,
+        /// t = 1 → the tip tangent; the Curvature bump has zero slope there), so the last section of a parent and the first section of its apical
+        /// child coincide — no crack at the joint (PA-102R: 1-px holes on sharper S bends); inside — central difference.
+        /// </summary>
+        Vector2 SectionTangent(int i, float t)
+        {
+            if (t <= 0f) return _tanBase[i];
+            if (t >= 1f) return _tanTip[i];
+            Vector2 tangent = Eval(i, Mathf.Min(1f, t + 0.01f)) - Eval(i, Mathf.Max(0f, t - 0.01f));
+            return tangent.sqrMagnitude > 1e-10f ? tangent.normalized : _dir[i];
         }
 
         static Vector2 Bisector(Vector2 a, Vector2 b)
@@ -390,10 +422,7 @@ namespace PocketArbor.DevTools.GrowthPreview
             {
                 float t = tEnd * SectionT(s, sections, flare);
                 Vector2 point = Eval(i, t);
-                Vector2 ahead = Eval(i, Mathf.Min(1f, t + 0.01f));
-                Vector2 behind = Eval(i, Mathf.Max(0f, t - 0.01f));
-                Vector2 tangent = ahead - behind;
-                tangent = tangent.sqrMagnitude > 1e-10f ? tangent.normalized : _dir[i];
+                Vector2 tangent = SectionTangent(i, t);
                 float width = Width(i, t, point.y);
                 Vector2 side = new Vector2(-tangent.y, tangent.x) * (width * 0.5f);
                 // Light from the left: the right flank is a shade darker.
@@ -494,17 +523,26 @@ namespace PocketArbor.DevTools.GrowthPreview
             // Projected horizontal reach: roots facing the viewer show less of their length sideways.
             float reach = length * Mathf.Max(0.35f, Mathf.Abs(sin));
             float moss = _render.MossLineY;
-            float startY = _render.NebariRootStartHeightRatio * th0;
-            float plateau = Mathf.Min(moss + _render.NebariRootMossClearance, startY);
-            float tStart = TrunkParamAtHeight(startY);
-            var p0 = new Vector2(Eval(0, tStart).x + sin * TrunkHalfWidth(tStart) * 0.8f, startY);
-            float dropRun = Mathf.Min(0.5f * reach, Mathf.Max(0f, startY - plateau) / Mathf.Max(0.2f, Mathf.Tan(drop)));
+            // ⚑R BALANCE §1.5.5 / ADR-0004 rev.5: the root starts on the #0 arc at s0 = NebariRootStartHeightRatio·th0, its centre line inside the
+            // silhouette at d0 = (0.5·w_flare − 0.5·t_root)·max(|sin a|, 0.35) from the axis (the outer edge on the trunk contour), heading down
+            // the #0 axis deflected outwards by 90° − NebariRootStartAngleDeg (along the trunk surface), then the chord of segment 1 drops at
+            // NebariRootDrop to the moss line and eases into the shelf.
+            float tStart = TrunkParamAtArc(_render.NebariRootStartHeightRatio * th0);
+            Vector2 axisPoint = Eval(0, tStart);
+            Vector2 axisTangent = Eval(0, Mathf.Min(1f, tStart + 0.01f)) - Eval(0, Mathf.Max(0f, tStart - 0.01f));
+            axisTangent = axisTangent.sqrMagnitude > 1e-10f ? axisTangent.normalized : Vector2.up;
+            Vector2 outward = new Vector2(axisTangent.y, -axisTangent.x) * dir;
+            float d0 = Mathf.Max(0f, TrunkHalfWidth(tStart) - 0.5f * baseWidth) * Mathf.Max(Mathf.Abs(sin), 0.35f);
+            Vector2 p0 = axisPoint + outward * d0;
+            float deflect = (90f - _render.NebariRootStartAngleDeg) * Mathf.Deg2Rad;
+            Vector2 t0 = (-axisTangent * Mathf.Cos(deflect) + outward * Mathf.Sin(deflect)).normalized;
+            float plateau = Mathf.Min(moss + _render.NebariRootMossClearance, p0.y);
+            float dropRun = Mathf.Min(0.5f * reach, Mathf.Max(0f, p0.y - plateau) / Mathf.Max(0.2f, Mathf.Tan(drop)));
             float buryRun = bury * reach;
             float flatRun = Mathf.Max(0.05f * reach, reach - dropRun - buryRun);
             var p1 = new Vector2(p0.x + dir * dropRun, plateau);
             var p2 = new Vector2(p1.x + dir * flatRun, plateau);
             var p3 = new Vector2(p2.x + dir * buryRun, moss - _render.NebariRootEndDepth - 0.5f * tipWidth);
-            var t0 = new Vector2(dir * Mathf.Cos(drop), -Mathf.Sin(drop));
             var t1 = new Vector2(dir, 0f);
             var t2 = new Vector2(dir * Mathf.Cos(endDrop), -Mathf.Sin(endDrop));
             var t3 = new Vector2(dir * Mathf.Cos(buryDrop), -Mathf.Sin(buryDrop));
@@ -546,6 +584,67 @@ namespace PocketArbor.DevTools.GrowthPreview
                 Vector2 p = Hermite(a, ta, b, tb, k / (float)steps);
                 _rootRaw.Add(new Vector3(p.x, p.y, 0f));
             }
+        }
+
+        /// <summary>Arc parameter of #0 at arc length <paramref name="s"/> from its base (bisection on <see cref="ArcLength0"/>; 1 beyond its end).</summary>
+        float TrunkParamAtArc(float s)
+        {
+            if (s <= 0f) return 0f;
+            if (ArcLength0(1f) <= s) return 1f;
+            float lo = 0f, hi = 1f;
+            for (int k = 0; k < 20; k++)
+            {
+                float mid = 0.5f * (lo + hi);
+                if (ArcLength0(mid) < s) lo = mid;
+                else hi = mid;
+            }
+            return 0.5f * (lo + hi);
+        }
+
+        /// <summary>
+        /// AC21 / ADR-0004 rev.5 «стики без латок»: signed distance of <paramref name="p"/> from the silhouette edge of the axis through node
+        /// <paramref name="axisNode"/> (its apical neighbours included; + = outside), and the parent's cylinder normal there
+        /// <paramref name="normalXY"/> = side·clamp(offset / half width, −1, 1) (z = √(1 − |xy|²) in the shader). Coarse sampling + refinement.
+        /// </summary>
+        public float SilhouetteDistance(int axisNode, Vector2 p, out Vector2 normalXY)
+        {
+            float best = float.MaxValue;
+            int bestNode = axisNode;
+            float bestT = 0f;
+            for (int c = 0; c < 3; c++)
+            {
+                int node = c == 0 ? axisNode : c == 1 ? _shape.ApicalChild(axisNode)
+                    : _nodes[axisNode].BranchSide == 0 ? _nodes[axisNode].ParentIndex : -1;
+                if (node < 0 || node >= _count) continue;
+                const int steps = 12;
+                for (int k = 0; k <= steps; k++)
+                {
+                    float t = k / (float)steps;
+                    float dist = (Eval(node, t) - p).sqrMagnitude;
+                    if (dist < best)
+                    {
+                        best = dist;
+                        bestNode = node;
+                        bestT = t;
+                    }
+                }
+            }
+            float h = 0.5f / 12f;
+            for (int iter = 0; iter < 8; iter++)
+            {
+                float ta = Mathf.Max(0f, bestT - h), tb = Mathf.Min(1f, bestT + h);
+                float da = (Eval(bestNode, ta) - p).sqrMagnitude, db = (Eval(bestNode, tb) - p).sqrMagnitude;
+                if (da < best) { best = da; bestT = ta; }
+                if (db < best) { best = db; bestT = tb; }
+                h *= 0.5f;
+            }
+            Vector2 centre = Eval(bestNode, bestT);
+            Vector2 tangent = Eval(bestNode, Mathf.Min(1f, bestT + 0.01f)) - Eval(bestNode, Mathf.Max(0f, bestT - 0.01f));
+            tangent = tangent.sqrMagnitude > 1e-10f ? tangent.normalized : _dir[bestNode];
+            Vector2 side = new Vector2(-tangent.y, tangent.x);
+            float half = Mathf.Max(1e-3f, 0.5f * Width(bestNode, bestT, centre.y));
+            normalXY = side * Mathf.Clamp(Vector2.Dot(p - centre, side) / half, -1f, 1f);
+            return Mathf.Sqrt(best) - half;
         }
 
         /// <summary>Arc parameter of #0 where its centre line reaches height <paramref name="y"/> (bisection; 0 below the base).</summary>
@@ -610,20 +709,9 @@ namespace PocketArbor.DevTools.GrowthPreview
             }
         }
 
-        /// <summary>Render hash (randomSeed, Id, salt) → [0, 1) (BALANCE §1.2.9 / TD-018: not the PCG stream).</summary>
-        static float Hash01(uint seed, int id, uint salt)
-        {
-            unchecked
-            {
-                uint h = seed ^ (0x9E3779B9u * (uint)(id + 1)) ^ (salt * 0x85EBCA6Bu);
-                h ^= h >> 16;
-                h *= 0x7FEB352Du;
-                h ^= h >> 15;
-                h *= 0x846CA68Bu;
-                h ^= h >> 16;
-                return (h >> 8) * (1f / 16777216f);
-            }
-        }
+        /// <summary>Render hash (randomSeed, Id, salt) → [0, 1): the Domain <see cref="PocketArbor.Domain.Random.StableHash"/> (TD-018, ADR-0003
+        /// PA-102R — one implementation; 24-bit result, exact in float).</summary>
+        static float Hash01(uint seed, int id, uint salt) => (float)PocketArbor.Domain.Random.StableHash.Hash01(seed, id, salt);
 
         // ---- Foliage pads (BALANCE §1.2.5) --------------------------------------------------------------
 
