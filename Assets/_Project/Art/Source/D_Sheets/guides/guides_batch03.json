@@ -1,0 +1,151 @@
+{
+ "note": "PA-102U batch 03 layout guides (docs/design/ANTIGRAVITY_BATCH_03.md). px from top-left; guideAspect = targetAspect - 0.02; acceptance on innerH/innerW of the keyed sprite.",
+ "guide_flat_pads_1024": [
+  {
+   "row": 1,
+   "col": 1,
+   "size": "S",
+   "role": null,
+   "x": 91,
+   "y": 84,
+   "w": 220,
+   "h": 70,
+   "guideAspect": 0.32,
+   "targetAspect": 0.34
+  },
+  {
+   "row": 1,
+   "col": 2,
+   "size": "S",
+   "role": null,
+   "x": 402,
+   "y": 77,
+   "w": 220,
+   "h": 77,
+   "guideAspect": 0.35,
+   "targetAspect": 0.37
+  },
+  {
+   "row": 1,
+   "col": 3,
+   "size": "S",
+   "role": null,
+   "x": 713,
+   "y": 70,
+   "w": 220,
+   "h": 84,
+   "guideAspect": 0.38,
+   "targetAspect": 0.4
+  },
+  {
+   "row": 2,
+   "col": 1,
+   "size": "M",
+   "role": null,
+   "x": 61,
+   "y": 305,
+   "w": 260,
+   "h": 75,
+   "guideAspect": 0.29,
+   "targetAspect": 0.31
+  },
+  {
+   "row": 2,
+   "col": 2,
+   "size": "M",
+   "role": null,
+   "x": 382,
+   "y": 294,
+   "w": 260,
+   "h": 86,
+   "guideAspect": 0.33,
+   "targetAspect": 0.35
+  },
+  {
+   "row": 2,
+   "col": 3,
+   "size": "M",
+   "role": null,
+   "x": 703,
+   "y": 284,
+   "w": 260,
+   "h": 96,
+   "guideAspect": 0.37,
+   "targetAspect": 0.39
+  },
+  {
+   "row": 3,
+   "col": 1,
+   "size": "L",
+   "role": null,
+   "x": 55,
+   "y": 541,
+   "w": 430,
+   "h": 120,
+   "guideAspect": 0.28,
+   "targetAspect": 0.3
+  },
+  {
+   "row": 3,
+   "col": 2,
+   "size": "L",
+   "role": null,
+   "x": 539,
+   "y": 511,
+   "w": 430,
+   "h": 150,
+   "guideAspect": 0.35,
+   "targetAspect": 0.37
+  },
+  {
+   "row": 4,
+   "col": 1,
+   "size": "L",
+   "role": null,
+   "x": 55,
+   "y": 816,
+   "w": 430,
+   "h": 138,
+   "guideAspect": 0.32,
+   "targetAspect": 0.34
+  },
+  {
+   "row": 4,
+   "col": 2,
+   "size": "L",
+   "role": null,
+   "x": 539,
+   "y": 791,
+   "w": 430,
+   "h": 163,
+   "guideAspect": 0.38,
+   "targetAspect": 0.4
+  }
+ ],
+ "guide_domes_1376x768": [
+  {
+   "row": 1,
+   "col": 1,
+   "size": "L",
+   "role": "dome",
+   "x": 112,
+   "y": 291,
+   "w": 520,
+   "h": 229,
+   "guideAspect": 0.44,
+   "targetAspect": 0.46
+  },
+  {
+   "row": 1,
+   "col": 2,
+   "size": "L",
+   "role": "dome",
+   "x": 744,
+   "y": 270,
+   "w": 520,
+   "h": 250,
+   "guideAspect": 0.48,
+   "targetAspect": 0.5
+  }
+ ]
+}
