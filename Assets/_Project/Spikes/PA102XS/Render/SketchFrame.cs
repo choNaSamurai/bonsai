@@ -1,0 +1,102 @@
+using UnityEngine;
+
+namespace PocketArbor.Spike.Render
+{
+    /// <summary>
+    /// Constants of sketch_v11: camera, DAT layout, limits. Sketch space: x right, y up, z toward the viewer
+    /// (right-handed). Unity world = sketch with z negated (the tree root has localScale z = -1).
+    /// </summary>
+    public static class SketchConst
+    {
+        public const float FrameW = 680f, FrameH = 480f, OX = 340f, GY = 400f;
+        public const float SE = 0.28f, CE = 0.96f; // CE = sqrt(1 - SE^2) exactly
+        public const float T0 = -260f, T1 = 480f;
+        public const int TW = 1024, NT = 96, NTC = 24, RP = 13, MAXR = 7, CP = 7, RC = 3, NSG = 6, MAXG = 9, MAXCPG = 14, MAXCH = 124;
+        public const int OB = NT + 1;                         // 97
+        public const int ORB = OB + NTC;                      // 121
+        public const int OSG = ORB + MAXR * RC;               // 142
+        public const int ORW = OSG + NSG;                     // 148
+        public const int NB = NTC + MAXR * RC + NSG + MAXR;   // 58
+        public const int OR = OB + NB;                        // 155
+        public const int OBR = OR + MAXR * RP;                // 246
+        public const int MAXPAD = 9;
+        public const int OPF = OBR + MAXCH * 5;               // 866
+        public const int MAXLEAF = 24000;
+
+        // Row 1 of the SDF data texture (row 0 = DAT).
+        public const int RowCb = 0, RowGm = 128, RowPe = 160;
+    }
+
+    /// <summary>
+    /// One tree state in the sketch_v11 array layout — the render-side mirror of TreeGen.SketchScene
+    /// (same arrays, same counters). Filled either from golden files or from the C# generator port.
+    /// </summary>
+    public sealed class SketchFrame
+    {
+        public string Key = "";
+        public string Species = "momiji";
+        public string Style = "moyogi";
+        public int Seed;
+        public float T;
+
+        public float L, R;
+        public int Nr, Ng, Nb, Nl, Nx, Nc, Np;
+
+        public readonly float[] Dat = new float[SketchConst.TW * 4];
+        public readonly float[] Cb = new float[SketchConst.MAXCH * 4];
+        public readonly float[] Gm = new float[SketchConst.MAXG * 8];
+        public readonly float[] Pe = new float[SketchConst.MAXPAD * 8];
+        public readonly float[] Leaf = new float[SketchConst.MAXLEAF * 16];
+
+        // Environment (sketch defaults: July, 10:00, no rain/wind).
+        public Vector3 LightDir = new Vector3(-0.4482191f, 0.7323608f, 0.5125888f);
+        public Vector3 SunColor = new Vector3(1f, 0.93f, 0.82f);
+        public Vector3 Ambient = new Vector3(0.85f, 0.9f, 1f);
+        public float SunIntensity = 1f; // uSI
+        public float Sun = 1f;          // uSun (overcast factor)
+        public float Foliage = 1f;      // ENV.fol
+
+        public float Kr => 0.28f * R + 0.5f;
+        public float Age => Mathf.Min(1f, T * 1.25f);
+
+        public static string MakeKey(string species, string style, int seed, float t)
+        {
+            return species + "_" + style + "_s" + seed + "_t" + Mathf.RoundToInt(t * 100f);
+        }
+    }
+
+    /// <summary>Per-species render constants of the sketch (SP table) that are not part of the arrays.</summary>
+    public sealed class SpeciesLook
+    {
+        public int Id;
+        public float Fd, Tr, Bump, Moss;
+        public int PotShape;     // 0 rounded rectangle, 1 ellipse
+        public float PotHw, PotHd, PotDep;
+        public Vector3 PotColor;
+        public int PotGlaze;     // uPotT: 0 tokoname, 1 kuro, 2 celadon
+
+        public string PotKey => PotShape + "_" + PotHw + "_" + PotHd + "_" + PotDep;
+
+        public static SpeciesLook For(string species, string style)
+        {
+            SpeciesLook s;
+            switch (species)
+            {
+                case "yamazakura":
+                    s = new SpeciesLook { Id = 1, Fd = .04f, Tr = 1.5f, Bump = .9f, Moss = .5f, PotShape = 1, PotHw = 136, PotHd = 66, PotDep = 38, PotColor = new Vector3(.11f, .16f, .12f), PotGlaze = 2 };
+                    break;
+                case "kuromatsu":
+                    s = new SpeciesLook { Id = 2, Fd = .075f, Tr = .6f, Bump = 2.6f, Moss = .6f, PotShape = 0, PotHw = 140, PotHd = 64, PotDep = 48, PotColor = new Vector3(.032f, .029f, .026f), PotGlaze = 1 };
+                    break;
+                default:
+                    s = new SpeciesLook { Id = 0, Fd = .05f, Tr = 1.9f, Bump = .7f, Moss = .85f, PotShape = 0, PotHw = 140, PotHd = 62, PotDep = 40, PotColor = new Vector3(.17f, .08f, .045f), PotGlaze = 0 };
+                    break;
+            }
+            if (style == "bunjin")
+            {
+                s.PotShape = 1; s.PotHw = 98; s.PotHd = 52; s.PotDep = 30;
+            }
+            return s;
+        }
+    }
+}

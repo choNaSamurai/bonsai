@@ -1,0 +1,14 @@
+{
+    "name": "PocketArbor.Spike.TreeGen",
+    "rootNamespace": "PocketArbor.Spike.TreeGen",
+    "references": [],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true
+}
