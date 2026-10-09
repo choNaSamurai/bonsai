@@ -1,5 +1,7 @@
 // PA-102X-S spike: wood + soil mesh. Geometry and per-vertex light come from the SDF bake (vertex texture fetch);
 // bark/soil colour and bark relief are the sketch's procedural functions of the sketch-space position.
+// C6: SK_BARK_LOW = LowEnd bark (one evaluation per noise term with analytic gradients; one Voronoi for Kuromatsu).
+// Both variants skip the soil function on pure-wood pixels and the bark on pure-soil pixels (h is baked per vertex).
 Shader "PocketArbor/Spike/Wood"
 {
     Properties
@@ -17,6 +19,7 @@ Shader "PocketArbor/Spike/Wood"
             #pragma target 3.5
             #pragma vertex vert
             #pragma fragment frag
+            #pragma multi_compile_local _ SK_BARK_LOW
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
             #include "SketchCommon.hlsl"
             #include "SketchBakeFetch.hlsl"
@@ -41,12 +44,24 @@ Shader "PocketArbor/Spike/Wood"
                 float3 p = i.ps, n = normalize(i.n);
                 float tr = i.mt.x, h = saturate(i.mt.y);
                 float mat = _SkAge * lerp(.25, 1., tr);
-                float3 base = lerp(skSoilC(p), skBarkC(p, mat), h);
-                if (h > .5 && mat > .02)
+                float3 base;
+                [branch] if (h < .002) base = skSoilC(p);
+                else
                 {
-                    float e = .35, h0 = skBarkH(p, mat);
-                    float3 gr = float3(skBarkH(p + float3(e, 0, 0), mat) - h0, skBarkH(p + float3(0, e, 0), mat) - h0, skBarkH(p + float3(0, 0, e), mat) - h0) / e;
-                    n = normalize(n - _SkBump * mat * (gr - n * dot(gr, n)));
+                    bool relief = h > .5 && mat > .02;
+                #if defined(SK_BARK_LOW)
+                    float3 gr;
+                    float3 bark = skBarkLow(p, mat, gr);
+                #else
+                    float3 bark = skBarkC(p, mat), gr = 0;
+                    [branch] if (relief)
+                    {
+                        float e = .35, h0 = skBarkH(p, mat);
+                        gr = float3(skBarkH(p + float3(e, 0, 0), mat) - h0, skBarkH(p + float3(0, e, 0), mat) - h0, skBarkH(p + float3(0, 0, e), mat) - h0) / e;
+                    }
+                #endif
+                    if (relief) n = normalize(n - _SkBump * mat * (gr - n * dot(gr, n)));
+                    base = h > .998 ? bark : lerp(skSoilC(p), bark, h);
                 }
                 float sh;
                 float3 col = skShade(base, n, i.lt, sh);

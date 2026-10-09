@@ -36,15 +36,17 @@ namespace PocketArbor.Spike.Editor
             if (EditorUserBuildSettings.activeBuildTarget != BuildTarget.Android)
                 EditorUserBuildSettings.SwitchActiveBuildTarget(BuildTargetGroup.Android, BuildTarget.Android);
 
-            MakeScene();
             ConfigurePlayer();
             if (Arg("-spikeAllowVulkan") != "0") AllowVulkanOnAllDevices();
             var summary = new StringBuilder();
             bool failed = false;
             foreach (string v in variantsArg.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries))
             {
-                bool dev = v.EndsWith("-dev", StringComparison.Ordinal);
+                bool trace = v.EndsWith("-trace", StringComparison.Ordinal);
+                bool dev = v.EndsWith("-dev", StringComparison.Ordinal) || trace;
                 bool empty = v.EndsWith("-empty", StringComparison.Ordinal);
+                bool noPso = v.EndsWith("-nopso", StringComparison.Ordinal);
+                if (!empty) MakeScene(trace, !trace && !noPso);
                 bool gles = v.StartsWith("gles", StringComparison.Ordinal);
                 PlayerSettings.SetUseDefaultGraphicsAPIs(BuildTarget.Android, false);
                 PlayerSettings.SetGraphicsAPIs(BuildTarget.Android, new[] { gles ? GraphicsDeviceType.OpenGLES3 : GraphicsDeviceType.Vulkan });
@@ -77,7 +79,10 @@ namespace PocketArbor.Spike.Editor
             return null;
         }
 
-        private static void MakeScene()
+        /// <summary>PSO collection traced on the device (K9), imported from src/Device/PSO.</summary>
+        private const string PsoPath = "Assets/_Project/Spikes/PA102XS/Device/PSO/PA102XS_Vulkan.graphicsstate";
+
+        private static void MakeScene(bool tracePso, bool usePso)
         {
             Directory.CreateDirectory(SceneDir);
             var scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
@@ -86,6 +91,10 @@ namespace PocketArbor.Spike.Editor
             SketchCamera.Apply(cam);
             var runner = new GameObject("PA102XS_DeviceRunner").AddComponent<SpikeDeviceRunner>();
             runner.cam = cam;
+            runner.scenario = Arg("-spikeScenario") ?? "2c";
+            runner.tracePso = tracePso;
+            runner.pso = usePso ? AssetDatabase.LoadAssetAtPath<GraphicsStateCollection>(PsoPath) : null;
+            Debug.Log("SPIKE-BUILD| scene: scenario " + runner.scenario + ", trace " + tracePso + ", pso " + (runner.pso != null ? runner.pso.totalGraphicsStateCount + " states" : "none"));
             string[] names = { SketchTreeRenderer.WoodShader, SketchTreeRenderer.PotShader, SketchTreeRenderer.LeafShader, SketchTreeRenderer.BakeShader };
             runner.shaders = new Shader[names.Length];
             for (int i = 0; i < names.Length; i++)
@@ -131,6 +140,8 @@ namespace PocketArbor.Spike.Editor
         {
             try
             {
+                Directory.CreateDirectory(SceneDir);
+                AssetDatabase.Refresh();
                 var lists = new VulkanDeviceFilterLists();
                 Debug.Log("SPIKE-VK| new lists: deny " + (lists.vulkanDeviceDenyFilters?.Length ?? -1) + ", allow " + (lists.vulkanDeviceAllowFilters?.Length ?? -1));
                 lists.vulkanDeviceDenyFilters = new VulkanDeviceFilterData[0];

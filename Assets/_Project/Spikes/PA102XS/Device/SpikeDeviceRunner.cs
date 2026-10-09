@@ -6,14 +6,17 @@ using System.Text;
 using PocketArbor.Spike.Render;
 using Unity.Profiling;
 using UnityEngine;
+using UnityEngine.Rendering;
 
 namespace PocketArbor.Spike.Device
 {
     /// <summary>
-    /// PA-102X-S phase 2a device harness (one scene, runs once at start and writes JSON + PNG into
-    /// persistentDataPath/pa102xs, then "done.txt"). Scenarios: empty baseline, cold first show (K9), steady-state
-    /// with wind per configuration (K1 GPU ms, K2 FPS, K3 GC, K8 memory), cut (K4), daily rebuild (K5),
-    /// Chronicle scrubbing without bake (K7), screenshots for K11. Per-frame measuring loops allocate nothing.
+    /// PA-102X-S device harness (one scene, runs once at start, writes JSON + PNG into persistentDataPath/pa102xs, then
+    /// "done.txt"). Scenario "2c" (default): K9 first show (async rebuild, PSO warm-up), K8 memory, K4 cut (masked
+    /// re-bake), K5 daily rebuild (worker thread + slices), short steady/Chronicle sanity. Scenario "2a": the full
+    /// phase-2a set (steady 60 s, GPU loop, cut, growth, Chronicle) for the C7 re-measure.
+    /// <see cref="tracePso"/> (Development build): records a GraphicsStateCollection of everything drawn and saves it.
+    /// Per-frame measuring loops allocate nothing.
     /// </summary>
     public sealed class SpikeDeviceRunner : MonoBehaviour
     {
@@ -21,6 +24,11 @@ namespace PocketArbor.Spike.Device
         public Camera cam;
         public float wind = 0.5f;
         public int sliceFrames = 8;
+        public int rebuildFrames = 60;
+        public int growthFrames = 120;
+        public string scenario = "2c";
+        public GraphicsStateCollection pso;
+        public bool tracePso;
 
         private const int MaxFrames = 8192;
         private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
@@ -36,11 +44,22 @@ namespace PocketArbor.Spike.Device
         private SketchTreeRenderer _tree;
         private readonly SketchFrame _frame = new SketchFrame();
         private string _dir;
-        private float _time;
-        private Color _screenBg = new Color(0.93f, 0.92f, 0.9f, 1f);
+        private float _time, _windNow;
+        private readonly Color _screenBg = new Color(0.93f, 0.92f, 0.9f, 1f);
+        private GraphicsStateCollection _trace;
+        private double[] _passMs;
 
         private bool Dev => Debug.isDebugBuild;
         private float SteadySeconds => Dev ? 15f : 60f;
+
+        private void Awake()
+        {
+            if (tracePso)
+            {
+                _trace = new GraphicsStateCollection();
+                _trace.BeginTrace();
+            }
+        }
 
         private IEnumerator Start()
         {
@@ -55,7 +74,7 @@ namespace PocketArbor.Spike.Device
             _recGcUsed = ProfilerRecorder.StartNew(ProfilerCategory.Memory, "GC Used Memory");
             _recSysUsed = ProfilerRecorder.StartNew(ProfilerCategory.Memory, "System Used Memory");
             ApplyScreenCamera();
-            Log("start " + SystemInfo.deviceModel + " " + SystemInfo.graphicsDeviceType + " dev=" + Dev);
+            Log("start " + SystemInfo.deviceModel + " " + SystemInfo.graphicsDeviceType + " dev=" + Dev + " scenario=" + scenario + " trace=" + tracePso + " pso=" + (pso != null));
 
             _json.Append("{\n");
             Field("device", SystemInfo.deviceModel);
@@ -63,57 +82,45 @@ namespace PocketArbor.Spike.Device
             Field("api", SystemInfo.graphicsDeviceType.ToString());
             Field("apiVersion", SystemInfo.graphicsDeviceVersion);
             Field("os", SystemInfo.operatingSystem);
+            Field("scenario", scenario);
             Field("development", Dev ? "true" : "false", true);
             Field("screen", Screen.width + "x" + Screen.height);
             Field("refreshRate", Screen.currentResolution.refreshRateRatio.value.ToString("0.##", Inv), true);
             Field("quality", QualitySettings.names[QualitySettings.GetQualityLevel()]);
-            Field("pipeline", UnityEngine.Rendering.GraphicsSettings.currentRenderPipeline != null ? UnityEngine.Rendering.GraphicsSettings.currentRenderPipeline.name : "builtin");
             Field("frameTimingGpu", FrameTimingManager.IsFeatureEnabled() ? "true" : "false", true);
             Field("recGcAllocInFrame", _recGcAlloc.Valid ? "true" : "false", true);
-            Field("recGfxUsed", _recGfxUsed.Valid ? "true" : "false", true);
-            Field("maxTextureSize", SystemInfo.maxTextureSize.ToString(Inv), true);
-            Field("supportsRGBAFloatRT", SystemInfo.SupportsRenderTextureFormat(RenderTextureFormat.ARGBFloat) ? "true" : "false", true);
-            Field("supportsRGBAHalfRT", SystemInfo.SupportsRenderTextureFormat(RenderTextureFormat.ARGBHalf) ? "true" : "false", true);
+            Field("supportsParallelPSOCreation", SystemInfo.supportsParallelPSOCreation ? "true" : "false", true);
+            Field("psoTrace", tracePso ? "true" : "false", true);
+
+            // K9: PSO warm-up while the app "loads" (blocking here = loading screen).
+            if (pso != null && !tracePso)
+            {
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                pso.WarmUp().Complete();
+                Field("psoWarmUpMs", sw.Elapsed.TotalMilliseconds.ToString("0.0", Inv), true);
+                Field("psoStates", pso.totalGraphicsStateCount.ToString(Inv), true);
+                Field("psoVariants", pso.variantCount.ToString(Inv), true);
+                Field("psoWarmedUp", pso.isWarmedUp ? "true" : "false", true);
+                Log("PSO warm-up " + sw.Elapsed.TotalMilliseconds.ToString("0.0", Inv) + " ms, states " + pso.totalGraphicsStateCount);
+            }
             _json.Append("  \"sections\": [\n");
 
             for (int i = 0; i < 30; i++) yield return null;
+            _tree = new SketchTreeRenderer(null, HideFlags.None) { RebuildFrames = rebuildFrames };
 
-            // 1. Empty baseline (camera clear only).
-            yield return Measure("baseline_empty", 10f, false, null);
-
-            // 2. Cold first show (K9): shaders/pipelines are created on first draw.
-            yield return ColdFirstShow();
-
-            // 3. Steady state with wind (K1, K2, K3, K8) + screenshots (K11).
-            string[] species = { "momiji", "kuromatsu", "yamazakura" };
-            foreach (string sp in species)
-                yield return Steady(sp, "moyogi", 3, 1f, false);
-            yield return Steady("momiji", "moyogi", 3, 1f, true);
-            yield return Steady("kuromatsu", "moyogi", 3, 1f, true);
-            _tree.WoodBuilder.RingSpacingK = 0.55f; // back to quality preset
-            _tree.WoodBuilder.RingSpacingMin = 0.45f; _tree.WoodBuilder.RingSpacingMax = 1.8f;
-            _tree.WoodBuilder.SideLength = 2.0f; _tree.WoodBuilder.MinSides = 6; _tree.WoodBuilder.MaxSides = 44; _tree.WoodBuilder.SoilStep = 1.6f;
-
-            // Slicing weights from the measured pass costs on this device (first steady configuration).
-            if (_passMs != null)
-            {
-                SdfBaker.SetPassCost((float)Math.Max(_passMs[0], .1), (float)Math.Max(_passMs[1], .1), (float)Math.Max(_passMs[2], .1), (float)Math.Max(_passMs[3], .1));
-                Log("slice weights from device: " + _passMs[0].ToString("0.0", Inv) + "/" + _passMs[1].ToString("0.0", Inv) + "/" + _passMs[2].ToString("0.0", Inv) + "/" + _passMs[3].ToString("0.0", Inv));
-            }
-
-            // 4. Cut (K4) and 5. daily rebuild (K5).
-            yield return CutScenario("momiji", sliceFrames);
-            yield return CutScenario("momiji", 24);
-            yield return CutScenario("kuromatsu", sliceFrames);
-            yield return Growth("momiji", 0.95f, 1f);
-
-            // 6. Chronicle scrubbing without bake (K7).
-            yield return Chronicle("momiji");
-            yield return Chronicle("kuromatsu");
+            if (scenario == "2a") yield return Scenario2a();
+            else if (scenario == "c6") yield return ScenarioC6();
+            else yield return Scenario2c();
 
             _json.Append("\n  ]\n}\n");
-            string name = "results_" + SystemInfo.graphicsDeviceType + (Dev ? "_dev" : "") + ".json";
+            string name = "results_" + scenario + "_" + SystemInfo.graphicsDeviceType + (Dev ? "_dev" : "") + (tracePso ? "_trace" : "") + ".json";
             File.WriteAllText(Path.Combine(_dir, name), _json.ToString());
+            if (_trace != null)
+            {
+                _trace.EndTrace();
+                bool ok = _trace.SaveToFile(Path.Combine(_dir, "PA102XS_" + SystemInfo.graphicsDeviceType + ".graphicsstate"));
+                Log("PSO trace saved=" + ok + " states " + _trace.totalGraphicsStateCount + " variants " + _trace.variantCount);
+            }
             File.WriteAllText(Path.Combine(_dir, "done.txt"), name);
             Log("PA102XS_DONE " + name);
         }
@@ -140,50 +147,289 @@ namespace PocketArbor.Spike.Device
             SketchGlobals.SetWind(_windNow, _time);
         }
 
-        private float _windNow;
-        private double[] _passMs;
-
-        // ------------------------------------------------------------------ scenarios
-
         private SketchFrame Gen(string sp, string style, int seed, float t)
         {
             TreeGenAdapter.Generate(sp, style, seed, t, _frame);
             return _frame;
         }
 
-        private IEnumerator ColdFirstShow()
+        // ================================================================== scenario 2c (C1-C4)
+
+        private IEnumerator Scenario2c()
         {
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            _tree = new SketchTreeRenderer(null, HideFlags.None);
-            double create = sw.Elapsed.TotalMilliseconds;
-            sw.Restart();
-            SketchTreeRenderer.Stats st = _tree.Show(Gen("momiji", "moyogi", 3, 1f));
-            double show = sw.Elapsed.TotalMilliseconds;
-            // First frames with the tree: pipeline/shader creation lands here.
-            yield return Measure("cold_first_show_momiji", 0f, false, null, 45);
-            AppendStats("cold_first_show_momiji_build", st, string.Format(Inv, "\"createMs\": {0:0.0}, \"showSyncMs\": {1:0.0}, \"firstFramesDtMs\": [{2:0.0}, {3:0.0}, {4:0.0}, {5:0.0}]",
-                create, show, _dt[0], _dt[1], _dt[2], _dt[3]));
-            sw.Restart();
-            SketchTreeRenderer.Stats st2 = _tree.Show(Gen("kuromatsu", "moyogi", 3, 1f));
-            double show2 = sw.Elapsed.TotalMilliseconds;
-            yield return Measure("second_species_show_kuromatsu", 0f, false, null, 45);
-            AppendStats("second_species_show_kuromatsu_build", st2, string.Format(Inv, "\"showSyncMs\": {0:0.0}, \"firstFramesDtMs\": [{1:0.0}, {2:0.0}, {3:0.0}, {4:0.0}]",
-                show2, _dt[0], _dt[1], _dt[2], _dt[3]));
-            // Same species again: no pot rebuild, no new shaders — the steady rebuild cost of a full sync show.
-            sw.Restart();
-            SketchTreeRenderer.Stats st3 = _tree.Show(Gen("kuromatsu", "moyogi", 3, 1f));
-            double show3 = sw.Elapsed.TotalMilliseconds;
-            yield return Measure("repeat_show_kuromatsu", 0f, false, null, 20);
-            AppendStats("repeat_show_kuromatsu_build", st3, string.Format(Inv, "\"showSyncMs\": {0:0.0}, \"firstFramesDtMs\": [{1:0.0}, {2:0.0}, {3:0.0}, {4:0.0}]",
-                show3, _dt[0], _dt[1], _dt[2], _dt[3]));
+            // K9 + K8: first show of the app, async (worker + slices), with/without PSO warm-up.
+            yield return AsyncShow("first_show_momiji", "momiji", 1f, 45);
+            AppendMemory("memory_after_first_show_momiji");
+            yield return AsyncShow("show_kuromatsu", "kuromatsu", 1f, 30);
+            AppendMemory("memory_kuromatsu");
+            _windNow = wind;
+            yield return Measure("steady_kuromatsu_10s", Dev ? 5f : 10f, null);
+            _windNow = 0f;
+
+            // K4: cut with masked re-bake (kuromatsu, then momiji), light in <= sliceFrames frames.
+            yield return CutScenario("kuromatsu", sliceFrames);
+            yield return AsyncShow("show_momiji", "momiji", 1f, 20);
+            yield return CutScenario("momiji", sliceFrames);
+            Screenshot("shot_cut_momiji_2c");
+            yield return CutScenario("momiji", sliceFrames); // second cut on the same tree (next primary)
+
+            // K5: daily growth on the worker, bake over rebuildFrames, swap.
+            yield return AsyncShow("show_momiji_t95", "momiji", 0.95f, 10);
+            _tree.ResetPeak();
+            yield return Growth("growth_momiji_95_100", "momiji", 1f);
+            AppendMemory("memory_after_growth");
+            yield return Growth("growth_kuromatsu_switch", "kuromatsu", 1f);
+
+            // K7 sanity after C5: Chronicle 5 s.
+            yield return Chronicle("momiji", 5f);
+            yield return AsyncShow("show_momiji_end", "momiji", 1f, 10);
+            Screenshot("shot_momiji_2c");
         }
 
-        private IEnumerator Steady(string sp, string style, int seed, float t, bool budget)
+        /// <summary>BeginRebuild (generator on the worker) → frames until the swap → <paramref name="after"/> more frames.</summary>
+        private IEnumerator AsyncShow(string name, string sp, float t, int after)
         {
-            if (budget) _tree.WoodBuilder.UseBudgetPreset();
+            _windNow = 0f;
+            ResetFrames();
+            _tree.ResetPeak();
+            long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+            _tree.BeginRebuild(sp, "moyogi", 3, t, rebuildFrames);
+            _work[0] = (float)((System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency);
+            int frames = 0, swapAt = -1;
+            while (frames < 600)
+            {
+                yield return null;
+                Sample();
+                frames++;
+                long a = System.Diagnostics.Stopwatch.GetTimestamp();
+                bool swapped = _tree.Tick();
+                if (_n < MaxFrames) _work[_n] = (float)((System.Diagnostics.Stopwatch.GetTimestamp() - a) * 1000.0 / System.Diagnostics.Stopwatch.Frequency);
+                if (swapped) { swapAt = frames; break; }
+            }
+            for (int i = 0; i < after; i++) { yield return null; Sample(); }
+            SketchTreeRenderer.Stats st = _tree.LastJobStats;
+            AppendFrames(name, string.Format(Inv,
+                "\"uploadSceneMs\": {14:0.0}, \"uploadInputsMs\": {15:0.0}, \"beginSliceMs\": {16:0.0}, \"framesToVisible\": {0}, \"workerGenMs\": {1:0.0}, \"workerPotMs\": {2:0.0}, \"workerWoodMs\": {3:0.0}, \"workerClassifyMs\": {4:0.0}, \"workerLeafMs\": {5:0.0}, \"workerFillMs\": {6:0.0}, \"woodTris\": {7}, \"snapVerts\": {8}, \"woodVerts\": {9}, \"leaves\": {10}, \"potTris\": {11}, \"peakGpuBytes\": {12}, {13}",
+                swapAt, st.GenMs, st.PotMs, st.WoodMs, st.ClassifyMs, st.LeafMs, st.BakeFillMs, st.WoodTris, st.SnapVerts, st.WoodVerts, st.Leaves, st.PotTris, _tree.PeakGpuBytes, FrameList(Math.Min(_n, swapAt + after + 1)),
+                _tree.LastUploadSceneMs, _tree.LastUploadInputsMs, _tree.LastBeginSliceMs));
+        }
+
+        private IEnumerator CutScenario(string sp, int slices)
+        {
+            _windNow = 0f;
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            _tree.PrepareCut();
+            double prep = sw.Elapsed.TotalMilliseconds;
+            int leavesBefore = _tree.DisplayedLeafCount;
+            for (int i = 0; i < 20; i++) yield return null;
+            ResetFrames();
+            _tree.ResetPeak();
+            SketchTreeRenderer.CutStats cs = _tree.Cut(0, slices);
+            _work[0] = (float)cs.CpuMs;
+            int frames = 0;
+            yield return null;
+            Sample();
+            while (true)
+            {
+                long a = System.Diagnostics.Stopwatch.GetTimestamp();
+                bool swapped = _tree.Tick();
+                if (_n < MaxFrames) _work[_n] = (float)((System.Diagnostics.Stopwatch.GetTimestamp() - a) * 1000.0 / System.Diagnostics.Stopwatch.Frequency);
+                frames++;
+                yield return null;
+                Sample();
+                if (swapped || frames > 64) break;
+            }
+            for (int i = 0; i < 10; i++) { yield return null; Sample(); }
+            AppendFrames("cut_" + sp + "_n" + slices, string.Format(Inv,
+                "\"prepareLeafGroupsMs\": {0:0.0}, \"cutCpuMs\": {1:0.00}, \"maskMs\": {2:0.00}, \"uploadMs\": {3:0.00}, \"maskJoint\": {4}, \"maskLightOnly\": {5}, \"vertices\": {6}, \"lightFrames\": {7}, \"sliceFramesTarget\": {8}, \"leavesBefore\": {9}, \"peakGpuBytes\": {10}, {11}",
+                prep, cs.CpuMs, _tree.LastCutMaskMs, cs.UploadMs, _tree.LastMaskJoint, _tree.LastMaskLight, cs.Vertices, frames, slices, leavesBefore, _tree.PeakGpuBytes, FrameList(Math.Min(_n, 40))));
+        }
+
+        private IEnumerator Growth(string name, string sp, float t)
+        {
+            _windNow = 0f;
+            for (int i = 0; i < 10; i++) yield return null;
+            ResetFrames();
+            _tree.ResetPeak();
+            long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+            _tree.BeginRebuild(sp, "moyogi", 3, t, growthFrames);
+            _work[0] = (float)((System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency);
+            int frames = 0;
+            while (frames < 600)
+            {
+                yield return null;
+                Sample();
+                frames++;
+                long a = System.Diagnostics.Stopwatch.GetTimestamp();
+                bool swapped = _tree.Tick();
+                if (_n < MaxFrames) _work[_n] = (float)((System.Diagnostics.Stopwatch.GetTimestamp() - a) * 1000.0 / System.Diagnostics.Stopwatch.Frequency);
+                if (swapped) break;
+            }
+            for (int i = 0; i < 10; i++) { yield return null; Sample(); }
+            SketchTreeRenderer.Stats st = _tree.LastJobStats;
+            AppendFrames(name, string.Format(Inv,
+                "\"framesToSwap\": {0}, \"workerGenMs\": {1:0.0}, \"workerPotMs\": {2:0.0}, \"workerWoodMs\": {3:0.0}, \"workerClassifyMs\": {4:0.0}, \"workerLeafMs\": {5:0.0}, \"workerFillMs\": {6:0.0}, \"woodTris\": {7}, \"snapVerts\": {8}, \"woodVerts\": {9}, \"peakGpuBytes\": {10}, {11}",
+                frames, st.GenMs, st.PotMs, st.WoodMs, st.ClassifyMs, st.LeafMs, st.BakeFillMs, st.WoodTris, st.SnapVerts, st.WoodVerts, _tree.PeakGpuBytes, FrameList(Math.Min(_n, 60))));
+        }
+
+        private IEnumerator Chronicle(string sp, float dur)
+        {
+            _windNow = 0f;
+            ResetFrames();
+            float elapsed = 0f;
+            double genSum = 0, buildSum = 0, genMax = 0, buildMax = 0;
+            int frames = 0;
+            while (elapsed < dur)
+            {
+                float t = Mathf.Clamp01(elapsed / dur);
+                long a = System.Diagnostics.Stopwatch.GetTimestamp();
+                SketchFrame f = Gen(sp, "moyogi", 3, t);
+                long b = System.Diagnostics.Stopwatch.GetTimestamp();
+                _tree.ShowNoBake(f);
+                long c = System.Diagnostics.Stopwatch.GetTimestamp();
+                double k = 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+                double g = (b - a) * k, bl = (c - b) * k;
+                genSum += g; buildSum += bl; genMax = Math.Max(genMax, g); buildMax = Math.Max(buildMax, bl);
+                if (_n < MaxFrames) _work[_n] = (float)(g + bl);
+                frames++;
+                yield return null;
+                Sample();
+                elapsed += Time.unscaledDeltaTime;
+            }
+            AppendFrames("chronicle_" + sp, string.Format(Inv, "\"chronicleFrames\": {0}, \"genAvgMs\": {1:0.00}, \"genMaxMs\": {2:0.00}, \"buildAvgMs\": {3:0.00}, \"buildMaxMs\": {4:0.00}",
+                frames, genSum / Math.Max(1, frames), genMax, buildSum / Math.Max(1, frames), buildMax));
+        }
+
+        private void AppendMemory(string name)
+        {
+            BeginSection(name);
+            _json.AppendFormat(Inv, "\"gpuBytes\": {0}, \"peakGpuBytes\": {1}, \"gfxUsedMemory\": {2}, \"gcUsedMemory\": {3}, \"systemUsedMemory\": {4}}}",
+                _tree.GpuBytes(), _tree.PeakGpuBytes, _recGfxUsed.Valid ? _recGfxUsed.LastValue : -1, _recGcUsed.Valid ? _recGcUsed.LastValue : -1, _recSysUsed.Valid ? _recSysUsed.LastValue : -1);
+            Log(name + " gpu " + (_tree.GpuBytes() / 1048576.0).ToString("0.00", Inv) + " MB peak " + (_tree.PeakGpuBytes / 1048576.0).ToString("0.00", Inv) + " MB");
+        }
+
+        // ================================================================== scenario c6 (TA): parametric pot, LowEnd bark
+
+        private static readonly int IdBarkLod = Shader.PropertyToID("_SkBarkLodMat");
+
+        private IEnumerator ScenarioC6()
+        {
+            // Pot mesh build on this CPU (main thread, IL2CPP): parametric builder vs Surface Nets.
+            BeginSection("c6_pot_build");
+            var pb = new ParametricPotBuilder();
+            var g = new GeoBuffer(1 << 13, 1 << 15);
+            var times = new double[50];
+            string[,] pots = { { "momiji", "moyogi" }, { "yamazakura", "moyogi" }, { "kuromatsu", "moyogi" }, { "momiji", "bunjin" } };
+            var sb = new StringBuilder();
+            for (int k = 0; k < pots.GetLength(0); k++)
+            {
+                SpeciesLook look = SpeciesLook.For(pots[k, 0], pots[k, 1]);
+                for (int i = 0; i < 5; i++) { g.Clear(); pb.Build(look, g); }
+                long a0 = GC.GetTotalMemory(false);
+                for (int i = 0; i < times.Length; i++)
+                {
+                    g.Clear();
+                    long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+                    pb.Build(look, g);
+                    times[i] = (System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+                }
+                long heap = GC.GetTotalMemory(false) - a0;
+                Array.Sort(times);
+                var sn = new GeoBuffer(1 << 15, 1 << 17);
+                var sdf = new PotSdf(look);
+                float hw = look.PotHw + 8f, hd = look.PotHd + 8f;
+                long s0 = System.Diagnostics.Stopwatch.GetTimestamp();
+                SurfaceNets.Build(sdf, new Vector3(-hw, -look.PotDep - 9f, -hd), new Vector3(hw, 6.5f, hd), 2.0f, sn, 2f, p => p.y < -1f && sdf.Inner(p.x, p.y, p.z) < 0.6f);
+                double snMs = (System.Diagnostics.Stopwatch.GetTimestamp() - s0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+                if (k > 0) sb.Append(", ");
+                sb.AppendFormat(Inv, "\"{0}_{1}\": {{\"paramTris\": {2}, \"paramVerts\": {3}, \"paramMedianMs\": {4:0.000}, \"paramMaxMs\": {5:0.000}, \"paramHeapGrowth\": {6}, \"sn20Ms\": {7:0.0}, \"sn20Tris\": {8}}}",
+                    pots[k, 0], pots[k, 1], pb.Triangles, pb.Vertices, times[times.Length / 2], times[times.Length - 1], heap, snMs, sn.TriangleCount);
+                Log("c6 pot " + pots[k, 0] + "/" + pots[k, 1] + ": param " + pb.Triangles + " tris median " + times[times.Length / 2].ToString("0.000", Inv) + " ms, SN 2.0 " + snMs.ToString("0.0", Inv) + " ms " + sn.TriangleCount + " tris");
+                yield return null;
+            }
+            _json.Append(sb).Append('}');
+
+            // First show with the parametric pot (worker: generator + pot + wood + leaves), then the pot GPU cost SN vs parametric.
+            _tree.ParametricPot = true;
+            yield return AsyncShow("c6_first_show_param_momiji", "momiji", 1f, 20);
+            foreach (string sp in new[] { "momiji", "yamazakura" })
+            {
+                for (int mode = 0; mode < 3; mode++)
+                {
+                    bool param = mode > 0;
+                    _tree.ParametricPot = param;
+                    _tree.PotMeshNormals = mode != 2;
+                    SketchTreeRenderer.Stats st = _tree.Show(Gen(sp, "moyogi", 3, 1f));
+                    _tree.RefreshPotShading();
+                    for (int i = 0; i < 10; i++) yield return null;
+                    string tag = sp + (mode == 0 ? "_sn20" : mode == 1 ? "_param" : "_param_sdfnrm");
+                    Screenshot("shot_c6_pot_" + tag);
+                    string loop = GpuLoop(60);
+                    BeginSection("c6_pot_gpu_" + tag);
+                    _json.AppendFormat(Inv, "\"potTris\": {0}, \"potVerts\": {1}, \"potShowMs\": {2:0.0}, {3}}}", st.PotTris, st.PotVerts, st.PotMs, loop);
+                    for (int i = 0; i < 10; i++) yield return null;
+                }
+            }
+            _tree.ParametricPot = true;
+            _tree.PotMeshNormals = true;
+            _tree.RefreshPotShading();
+
+            // K1 bark: full vs LowEnd (and LowEnd + thin-branch LOD for Kuromatsu).
+            foreach (string sp in new[] { "kuromatsu", "momiji", "yamazakura" })
+            {
+                _tree.Show(Gen(sp, "moyogi", 3, 1f));
+                for (int v = 0; v < 3; v++)
+                {
+                    if (v == 2 && sp != "kuromatsu") break;
+                    _tree.LowEndBark = v > 0;
+                    Shader.SetGlobalFloat(IdBarkLod, v == 2 ? 0.4f : 0f);
+                    for (int i = 0; i < 10; i++) yield return null;
+                    string tag = sp + (v == 0 ? "_full" : v == 1 ? "_low" : "_lowlod");
+                    Screenshot("shot_c6_bark_" + tag);
+                    string loop = GpuLoop(60);
+                    BeginSection("c6_bark_gpu_" + tag);
+                    _json.Append(loop).Append('}');
+                    for (int i = 0; i < 10; i++) yield return null;
+                }
+                if (sp == "kuromatsu")
+                {
+                    // Steady 10 s with wind, LowEnd bark (sanity: fps, GC).
+                    _tree.LowEndBark = true;
+                    Shader.SetGlobalFloat(IdBarkLod, 0f);
+                    _windNow = wind;
+                    yield return Measure("c6_steady_kuromatsu_low_10s", 10f, null);
+                    _windNow = 0f;
+                }
+            }
+            _tree.LowEndBark = false;
+            Shader.SetGlobalFloat(IdBarkLod, 0f);
+        }
+
+        // ================================================================== scenario 2a (full re-measure, C7)
+
+        private IEnumerator Scenario2a()
+        {
+            yield return Measure("baseline_empty", 10f, null);
+            yield return AsyncShow("first_show_momiji", "momiji", 1f, 45);
+            string[] species = { "momiji", "kuromatsu", "yamazakura" };
+            foreach (string sp in species) yield return Steady(sp, "moyogi", 3, 1f);
+            if (_passMs != null)
+                Log("bake pass ms: " + _passMs[0].ToString("0.0", Inv) + "/" + _passMs[1].ToString("0.0", Inv) + "/" + _passMs[2].ToString("0.0", Inv) + "/" + _passMs[3].ToString("0.0", Inv));
+            yield return AsyncShow("show_momiji", "momiji", 1f, 10);
+            yield return CutScenario("momiji", sliceFrames);
+            yield return AsyncShow("show_kuromatsu", "kuromatsu", 1f, 10);
+            yield return CutScenario("kuromatsu", sliceFrames);
+            yield return AsyncShow("show_momiji_t95", "momiji", 0.95f, 10);
+            yield return Growth("growth_momiji_95_100", "momiji", 1f);
+            yield return Chronicle("momiji", 10f);
+            yield return Chronicle("kuromatsu", 10f);
+        }
+
+        private IEnumerator Steady(string sp, string style, int seed, float t)
+        {
             _windNow = 0f;
             SketchTreeRenderer.Stats st = _tree.Show(Gen(sp, style, seed, t));
-            string tag = sp + "_" + style + "_s" + seed + "_t" + Mathf.RoundToInt(t * 100) + (budget ? "_budget" : "");
+            string tag = sp + "_" + style + "_s" + seed + "_t" + Mathf.RoundToInt(t * 100);
             for (int i = 0; i < 10; i++) yield return null;
             Screenshot("shot_" + tag);
             string loop = GpuLoop(Dev ? 20 : 60);
@@ -191,108 +437,16 @@ namespace PocketArbor.Spike.Device
             _windNow = wind;
             float warm = 0f;
             while (warm < 3f) { warm += Time.unscaledDeltaTime; yield return null; }
-            yield return Measure("steady_" + tag, SteadySeconds, true, null);
-            AppendStats("steady_" + tag + "_build", st, string.Format(Inv, "\"gpuBytesEstimate\": {0}, \"gfxUsedMemory\": {1}, \"gcUsedMemory\": {2}, \"systemUsedMemory\": {3}, {4}",
-                _tree.GpuBytesEstimate(), _recGfxUsed.Valid ? _recGfxUsed.LastValue : -1, _recGcUsed.Valid ? _recGcUsed.LastValue : -1, _recSysUsed.Valid ? _recSysUsed.LastValue : -1, loop));
+            yield return Measure("steady_" + tag, SteadySeconds, null);
+            BeginSection("steady_" + tag + "_build");
+            _json.AppendFormat(Inv, "\"woodTris\": {0}, \"leaves\": {1}, \"potTris\": {2}, \"bakeMs\": {3:0.0}, \"gpuBytes\": {4}, {5}}}",
+                st.WoodTris, st.Leaves, st.PotTris, st.BakeMs, _tree.GpuBytes(), loop);
             _windNow = 0f;
         }
-
-        private IEnumerator CutScenario(string sp, int slices)
-        {
-            _windNow = 0f;
-            _tree.Show(Gen(sp, "moyogi", 3, 1f));
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            _tree.PrepareCut();
-            double prep = sw.Elapsed.TotalMilliseconds;
-            int leavesBefore = _tree.DisplayedLeafCount;
-            for (int i = 0; i < 20; i++) yield return null;
-            // Frame 0: cut (geometry gone on the next presented frame), then light over N frames.
-            ResetFrames();
-            double cutMs = _tree.Cut(0, slices);
-            _work[0] = (float)cutMs;
-            int frames = 0;
-            yield return null;
-            Sample();
-            while (true)
-            {
-                var s2 = System.Diagnostics.Stopwatch.StartNew();
-                bool swapped = _tree.Tick();
-                _work[_n] = (float)s2.Elapsed.TotalMilliseconds;
-                frames++;
-                yield return null;
-                Sample();
-                if (swapped || frames > 64) break;
-            }
-            for (int i = 0; i < 10; i++) { yield return null; Sample(); }
-            string perFrame = FrameList(Math.Min(_n, 40));
-            if (slices == sliceFrames) Screenshot("shot_cut_" + sp);
-            AppendFrames("cut_" + sp + "_n" + slices, string.Format(Inv, "\"prepareLeafGroupsMs\": {0:0.0}, \"cutCpuMs\": {1:0.00}, \"lightFrames\": {2}, \"sliceFramesTarget\": {3}, \"leavesBefore\": {4}, {5}",
-                prep, cutMs, frames, slices, leavesBefore, perFrame));
-        }
-
-        private IEnumerator Growth(string sp, float t0, float t1)
-        {
-            _windNow = 0f;
-            _tree.Show(Gen(sp, "moyogi", 3, t0));
-            for (int i = 0; i < 20; i++) yield return null;
-            ResetFrames();
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            SketchFrame f = Gen(sp, "moyogi", 3, t1);
-            double gen = sw.Elapsed.TotalMilliseconds;
-            SketchTreeRenderer.Stats st = _tree.BeginRebuild(f, sliceFrames);
-            _work[0] = (float)(sw.Elapsed.TotalMilliseconds);
-            int frames = 0;
-            yield return null;
-            Sample();
-            while (true)
-            {
-                var s2 = System.Diagnostics.Stopwatch.StartNew();
-                bool swapped = _tree.Tick();
-                _work[_n] = (float)s2.Elapsed.TotalMilliseconds;
-                frames++;
-                yield return null;
-                Sample();
-                if (swapped || frames > 64) break;
-            }
-            AppendFrames("growth_" + sp, string.Format(Inv, "\"genMs\": {0:0.0}, \"buildWoodMs\": {1:0.0}, \"buildLeavesMs\": {2:0.0}, \"fillMs\": {3:0.0}, \"uploadMs\": {4:0.0}, \"bakeFrames\": {5}, \"woodTris\": {6}, {7}",
-                gen, st.WoodMs, st.LeafMs, st.BakeFillMs, st.UploadMs, frames, st.WoodTris, FrameList(Math.Min(_n, 40))));
-        }
-
-        private IEnumerator Chronicle(string sp)
-        {
-            _windNow = 0f;
-            ResetFrames();
-            float t = 0f;
-            float dur = 10f;
-            float elapsed = 0f;
-            double genSum = 0, buildSum = 0, genMax = 0, buildMax = 0;
-            int frames = 0;
-            while (elapsed < dur)
-            {
-                t = Mathf.Clamp01(elapsed / dur);
-                var sw = System.Diagnostics.Stopwatch.StartNew();
-                SketchFrame f = Gen(sp, "moyogi", 3, t);
-                double g = sw.Elapsed.TotalMilliseconds;
-                sw.Restart();
-                _tree.ShowNoBake(f);
-                double b = sw.Elapsed.TotalMilliseconds;
-                genSum += g; buildSum += b; genMax = Math.Max(genMax, g); buildMax = Math.Max(buildMax, b);
-                if (_n < MaxFrames) _work[_n] = (float)(g + b);
-                frames++;
-                yield return null;
-                Sample();
-                elapsed += Time.unscaledDeltaTime;
-            }
-            AppendFrames("chronicle_" + sp, string.Format(Inv, "\"frames\": {0}, \"genAvgMs\": {1:0.00}, \"genMaxMs\": {2:0.00}, \"buildAvgMs\": {3:0.00}, \"buildMaxMs\": {4:0.00}",
-                frames, genSum / frames, genMax, buildSum / frames, buildMax));
-            _tree.Show(Gen(sp, "moyogi", 3, 1f));
-        }
-
-        // ------------------------------------------------------------------ GPU-bound loop (K1 without GPU timers)
 
         /// <summary>
-        /// Renders the camera <paramref name="iters"/> times into a screen-sized RT and waits for the GPU once at the end:
-        /// wall time / iters ~ GPU cost per frame when GPU-bound (CPU submit runs ahead). Parts toggled by renderer.enabled.
+        /// Renders the camera <paramref name="iters"/> times into a screen-sized RT and waits for the GPU once at the end
+        /// (after a burn-in to raise GPU clocks): wall time / iters ~ GPU cost when GPU-bound. Median of 3 repetitions.
         /// </summary>
         private string GpuLoop(int iters)
         {
@@ -302,20 +456,19 @@ namespace PocketArbor.Spike.Device
             cam.targetTexture = rt;
             string[] parts = { "full", "wood", "leaves", "pot", "empty" };
             var res = new double[parts.Length, 3];
-            // Burn-in: let the GPU governor raise clocks before timing.
             SetParts("full");
             for (int i = 0; i < 90; i++) cam.Render();
-            UnityEngine.Rendering.AsyncGPUReadback.Request(rt, 0, 0, 1, 0, 1, 0, 1).WaitForCompletion();
+            AsyncGPUReadback.Request(rt, 0, 0, 1, 0, 1, 0, 1).WaitForCompletion();
             for (int rep = 0; rep < 3; rep++)
             for (int k = 0; k < parts.Length; k++)
             {
                 int pi = (k + rep * 2) % parts.Length;
                 SetParts(parts[pi]);
                 cam.Render();
-                UnityEngine.Rendering.AsyncGPUReadback.Request(rt, 0, 0, 1, 0, 1, 0, 1).WaitForCompletion();
+                AsyncGPUReadback.Request(rt, 0, 0, 1, 0, 1, 0, 1).WaitForCompletion();
                 var sw = System.Diagnostics.Stopwatch.StartNew();
                 for (int i = 0; i < iters; i++) cam.Render();
-                UnityEngine.Rendering.AsyncGPUReadback.Request(rt, 0, 0, 1, 0, 1, 0, 1).WaitForCompletion();
+                AsyncGPUReadback.Request(rt, 0, 0, 1, 0, 1, 0, 1).WaitForCompletion();
                 res[pi, rep] = sw.Elapsed.TotalMilliseconds / iters;
             }
             SetParts("full");
@@ -331,9 +484,8 @@ namespace PocketArbor.Spike.Device
                 if (sb.Length > 0) sb.Append(", ");
                 sb.AppendFormat(Inv, "\"gpuLoop_{0}_ms\": {1:0.000}, \"gpuLoop_{0}_reps\": [{2:0.00}, {3:0.00}, {4:0.00}]", parts[pi], med, a, b, c);
             }
-            // Bake passes over the displayed target (full target each, synced) — informs slicing weights.
-            BakeTarget bt = _tree.DisplayedBake;
-            double p0 = _tree.Baker.TimePass(bt, 0), p1 = _tree.Baker.TimePass(bt, 1), p2 = _tree.Baker.TimePass(bt, 2), p3 = _tree.Baker.TimePass(bt, 3);
+            double p0 = _tree.TimeBakePass(0), p1 = _tree.TimeBakePass(1), p2 = _tree.TimeBakePass(2), p3 = _tree.TimeBakePass(3);
+            _tree.ReleaseProfilingInputs();
             if (_passMs == null) _passMs = new[] { p0, p1, p2, p3 };
             sb.AppendFormat(Inv, ", \"bakePassMs\": [{0:0.0}, {1:0.0}, {2:0.0}, {3:0.0}]", p0, p1, p2, p3);
             Log("gpuLoop " + sb);
@@ -347,11 +499,12 @@ namespace PocketArbor.Spike.Device
             _tree.Pot.enabled = part == "full" || part == "pot";
         }
 
-        // ------------------------------------------------------------------ measurement
+        // ================================================================== measurement
 
         private void ResetFrames()
         {
             _n = 0;
+            for (int i = 0; i < 64; i++) _work[i] = 0f;
             _lastHeap = GC.GetTotalMemory(false);
             FrameTimingManager.CaptureFrameTimings();
         }
@@ -374,7 +527,7 @@ namespace PocketArbor.Spike.Device
             _n++;
         }
 
-        private IEnumerator Measure(string name, float seconds, bool windOn, string extra, int frameCount = 0)
+        private IEnumerator Measure(string name, float seconds, string extra, int frameCount = 0)
         {
             ResetFrames();
             for (int i = 0; i < MaxFrames; i++) _work[i] = 0f;
@@ -390,19 +543,7 @@ namespace PocketArbor.Spike.Device
             AppendFrames(name, extra);
         }
 
-        // ------------------------------------------------------------------ output
-
-        private string FrameList(int n)
-        {
-            var sb = new StringBuilder("\"perFrame\": {\"dtMs\": [");
-            for (int i = 0; i < n; i++) sb.Append(i > 0 ? ", " : "").Append(_dt[i].ToString("0.0", Inv));
-            sb.Append("], \"gpuFtMs\": [");
-            for (int i = 0; i < n; i++) sb.Append(i > 0 ? ", " : "").Append(_gpu[i].ToString("0.0", Inv));
-            sb.Append("], \"workMs\": [");
-            for (int i = 0; i < n; i++) sb.Append(i > 0 ? ", " : "").Append(_work[i].ToString("0.0", Inv));
-            sb.Append("]}");
-            return sb.ToString();
-        }
+        // ================================================================== output
 
         private void Field(string k, string v, bool raw = false)
         {
@@ -419,16 +560,16 @@ namespace PocketArbor.Spike.Device
             _json.Append("    {\"name\": \"").Append(name).Append("\", ");
         }
 
-        private void AppendStats(string name, SketchTreeRenderer.Stats s, string extra)
+        private string FrameList(int n)
         {
-            BeginSection(name);
-            _json.AppendFormat(Inv, "\"woodMs\": {0:0.00}, \"potMs\": {1:0.0}, \"leafMs\": {2:0.00}, \"uploadMs\": {3:0.00}, \"bakeMs\": {4:0.0}, \"bakeFillMs\": {5:0.0}, \"bakeGpuSyncMs\": {6:0.0}, ",
-                s.WoodMs, s.PotMs, s.LeafMs, s.UploadMs, s.BakeMs, s.BakeFillMs, s.BakeGpuMs);
-            _json.AppendFormat(Inv, "\"woodVerts\": {0}, \"woodTris\": {1}, \"potVerts\": {2}, \"potTris\": {3}, \"leaves\": {4}, \"limbs\": {5}",
-                s.WoodVerts, s.WoodTris, s.PotVerts, s.PotTris, s.Leaves, s.Limbs);
-            if (!string.IsNullOrEmpty(extra)) _json.Append(", ").Append(extra);
-            _json.Append('}');
-            Log(name + " woodTris " + s.WoodTris + " bake " + s.BakeMs.ToString("0.0", Inv));
+            var sb = new StringBuilder("\"perFrame\": {\"dtMs\": [");
+            for (int i = 0; i < n; i++) sb.Append(i > 0 ? ", " : "").Append(_dt[i].ToString("0.0", Inv));
+            sb.Append("], \"workMs\": [");
+            for (int i = 0; i < n; i++) sb.Append(i > 0 ? ", " : "").Append(_work[i].ToString("0.0", Inv));
+            sb.Append("], \"gcBytes\": [");
+            for (int i = 0; i < n; i++) sb.Append(i > 0 ? ", " : "").Append(_gcAllocFrame[i].ToString(Inv));
+            sb.Append("]}");
+            return sb.ToString();
         }
 
         private void AppendFrames(string name, string extra)
@@ -438,13 +579,13 @@ namespace PocketArbor.Spike.Device
             _json.AppendFormat(Inv, "\"frames\": {0}, ", n);
             Stat("dtMs", _dt, n);
             Stat("gpuMs", _gpu, n);
-            Stat("cpuMs", _cpu, n);
             Stat("cpuMainMs", _cpuMain, n);
-            Stat("cpuRenderMs", _cpuRender, n);
             Stat("workMs", _work, n);
             float avgDt = Avg(_dt, n);
             float p99 = Percentile(_dt, n, 0.99f);
-            _json.AppendFormat(Inv, "\"fpsAvg\": {0:0.00}, \"fps1Low\": {1:0.00}, ", avgDt > 0 ? 1000f / avgDt : 0f, p99 > 0 ? 1000f / p99 : 0f);
+            int over = 0;
+            for (int i = 0; i < n; i++) if (_dt[i] > 17.5f) over++;
+            _json.AppendFormat(Inv, "\"fpsAvg\": {0:0.00}, \"fps1Low\": {1:0.00}, \"framesOver16_7\": {2}, ", avgDt > 0 ? 1000f / avgDt : 0f, p99 > 0 ? 1000f / p99 : 0f, over);
             long gcSum = 0, gcFrames = 0, heapPos = 0, heapFrames = 0;
             for (int i = 0; i < n; i++)
             {
@@ -455,8 +596,8 @@ namespace PocketArbor.Spike.Device
                 _recGcAlloc.Valid ? gcSum : -1, _recGcAlloc.Valid ? gcFrames : -1, heapPos, heapFrames);
             if (!string.IsNullOrEmpty(extra)) _json.Append(", ").Append(extra);
             _json.Append('}');
-            Log(string.Format(Inv, "{0} frames {1} fps {2:0.0} 1%low {3:0.0} gpu {4:0.00} ms gc {5} heap+ {6}", name, n, avgDt > 0 ? 1000f / avgDt : 0f,
-                p99 > 0 ? 1000f / p99 : 0f, Avg(_gpu, n), gcSum, heapPos));
+            Log(string.Format(Inv, "{0} frames {1} fps {2:0.0} dtMax {3:0.0} over16.7 {4} gc {5} heap+ {6}", name, n, avgDt > 0 ? 1000f / avgDt : 0f,
+                Percentile(_dt, n, 1f), over, gcSum, heapPos));
         }
 
         private void Stat(string key, float[] a, int n)

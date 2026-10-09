@@ -117,12 +117,22 @@ namespace PocketArbor.Spike.TreeGen
             }
         }
 
-        /// <summary>JS setSpecies(): bunjin swaps the pot for a small oval {shape:1, hw:98, hd:52, dep:30}.</summary>
+        // bunjin variants are built once (ForStyle is called every frame by the Chronicle — C5: no allocations)
+        private static readonly SpeciesDef MomijiBunjin = BunjinPot(Momiji);
+        private static readonly SpeciesDef YamazakuraBunjin = BunjinPot(Yamazakura);
+        private static readonly SpeciesDef KuromatsuBunjin = BunjinPot(Kuromatsu);
+
+        private static SpeciesDef BunjinPot(SpeciesDef b)
+        {
+            return b.WithPot(new PotDef(1, 98, 52, 30, b.Pot.Color, b.Pot.Type));
+        }
+
+        /// <summary>JS setSpecies(): bunjin swaps the pot for a small oval {shape:1, hw:98, hd:52, dep:30}. Cached instances.</summary>
         public static SpeciesDef ForStyle(string speciesKey, string style)
         {
             SpeciesDef b = Get(speciesKey);
             if (style != "bunjin") return b;
-            return b.WithPot(new PotDef(1, 98, 52, 30, b.Pot.Color, b.Pot.Type));
+            return b.Id == 0 ? MomijiBunjin : b.Id == 1 ? YamazakuraBunjin : KuromatsuBunjin;
         }
     }
 }

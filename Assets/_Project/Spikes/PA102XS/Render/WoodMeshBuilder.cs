@@ -11,11 +11,11 @@ namespace PocketArbor.Spike.Render
     /// </summary>
     public sealed class WoodMeshBuilder
     {
-        // Tessellation (sketch units).
-        public float RingSpacingK = 0.55f, RingSpacingMin = 0.45f, RingSpacingMax = 1.8f;
-        public float SideLength = 2.0f;
-        public int MinSides = 6, MaxSides = 44;
-        public float SoilStep = 1.6f;
+        // Tessellation (sketch units). Default = "budget" (owner's decision 2026-10-09: ~70k wood triangles).
+        public float RingSpacingK = 1.0f, RingSpacingMin = 0.6f, RingSpacingMax = 3.2f;
+        public float SideLength = 3.4f;
+        public int MinSides = 5, MaxSides = 28;
+        public float SoilStep = 3.0f;
 
         private Vector3[] _cp = new Vector3[512];
         private float[] _cr = new float[512];
@@ -36,13 +36,34 @@ namespace PocketArbor.Spike.Render
         public int LimbVerts { get; private set; }
         public int SoilVerts { get; private set; }
 
-        /// <summary>Coarser preset closer to the ADR-0011 budget (20-35k wood triangles).</summary>
+        /// <summary>Budget preset (default): ~66-72k wood+soil triangles at t = 1.</summary>
         public void UseBudgetPreset()
         {
             RingSpacingK = 1.0f; RingSpacingMin = 0.6f; RingSpacingMax = 3.2f;
             SideLength = 3.4f; MinSides = 5; MaxSides = 28;
             SoilStep = 3.0f;
         }
+
+        /// <summary>Phase-1 quality preset: ~130-144k triangles at t = 1.</summary>
+        public void UseQualityPreset()
+        {
+            RingSpacingK = 0.55f; RingSpacingMin = 0.45f; RingSpacingMax = 1.8f;
+            SideLength = 2.0f; MinSides = 6; MaxSides = 44;
+            SoilStep = 1.6f;
+        }
+
+        // Vertex ranges per part (owner: trunk -1, root r -> -2-r, limb l -> l, soil -100).
+        private int[] _rootV0 = new int[SketchConst.MAXR], _rootVN = new int[SketchConst.MAXR];
+        private int[] _limbV0 = new int[256], _limbVN = new int[256], _limbC0 = new int[256], _limbC1 = new int[256];
+        private float[] _limbK = new float[256];
+        private int _soilV0;
+        // Sphere list of the SDF primitives (chunk bounds) with the smin radius of their joint and their owner.
+        private Vector4[] _sph = new Vector4[512];
+        private float[] _sphK = new float[512];
+        private int[] _sphOwner = new int[512];
+        private int[] _sphSeg = new int[512];
+        private int _nsph;
+        public int SnapVerts { get; private set; }
 
         public void Build(SketchFrame f, SpeciesLook look, GeoBuffer b)
         {
@@ -61,7 +82,9 @@ namespace PocketArbor.Spike.Render
             {
                 n = 0;
                 for (int k = 0; k < SketchConst.RP; k++) n = PushCp(n, f.Dat, SketchConst.OR + r * SketchConst.RP + k);
+                _rootV0[r] = b.VCount;
                 Tube(b, n, true, tmaxBase);
+                _rootVN[r] = b.VCount - _rootV0[r];
             }
 
             RootVerts = b.VCount - TrunkVerts;
@@ -88,21 +111,33 @@ namespace PocketArbor.Spike.Render
                 float kg = g >= 0 ? f.Gm[g * 8 + 4] : 1f, ks = g >= 0 ? f.Gm[g * 8 + 7] : 1f;
                 bool first = g >= 0 && (int)f.Gm[g * 8 + 5] == start;
                 float tmax = Mathf.Max(0.8f, 0.6f * (first ? Mathf.Max(kg, ks) : ks));
-                int i0 = b.ICount;
+                int i0 = b.ICount, v0 = b.VCount;
                 Tube(b, n, true, tmax);
                 if (LimbCount == _limbGroup.Length)
                 {
-                    System.Array.Resize(ref _limbGroup, LimbCount * 2);
-                    System.Array.Resize(ref _limbIdx0, LimbCount * 2);
-                    System.Array.Resize(ref _limbIdxN, LimbCount * 2);
+                    int nn = LimbCount * 2;
+                    System.Array.Resize(ref _limbGroup, nn);
+                    System.Array.Resize(ref _limbIdx0, nn);
+                    System.Array.Resize(ref _limbIdxN, nn);
+                    System.Array.Resize(ref _limbV0, nn);
+                    System.Array.Resize(ref _limbVN, nn);
+                    System.Array.Resize(ref _limbC0, nn);
+                    System.Array.Resize(ref _limbC1, nn);
+                    System.Array.Resize(ref _limbK, nn);
                 }
                 _limbGroup[LimbCount] = g;
                 _limbIdx0[LimbCount] = i0;
                 _limbIdxN[LimbCount] = b.ICount - i0;
+                _limbV0[LimbCount] = v0;
+                _limbVN[LimbCount] = b.VCount - v0;
+                _limbC0[LimbCount] = start;
+                _limbC1[LimbCount] = cc;
+                _limbK[LimbCount] = Mathf.Max(kg, ks);
                 LimbCount++;
             }
 
             LimbVerts = b.VCount - TrunkVerts - RootVerts;
+            _soilV0 = b.VCount;
             Soil(b, look);
             SoilVerts = b.VCount - TrunkVerts - RootVerts - LimbVerts;
         }
@@ -118,7 +153,7 @@ namespace PocketArbor.Spike.Render
                 System.Array.Copy(b.Idx, at, dst, n, i0 - at);
                 n += i0 - at;
                 at = i0 + _limbIdxN[l];
-                if (_limbGroup[l] != group)
+                if (_limbGroup[l] != group && _limbGroup[l] != RemovedGroup)
                 {
                     System.Array.Copy(b.Idx, i0, dst, n, _limbIdxN[l]);
                     n += _limbIdxN[l];
@@ -127,6 +162,227 @@ namespace PocketArbor.Spike.Render
             System.Array.Copy(b.Idx, at, dst, n, b.ICount - at);
             n += b.ICount - at;
             return n;
+        }
+
+        private void AddSphere(float x, float y, float z, float r, float k, int owner)
+        {
+            if (_nsph == _sph.Length)
+            {
+                System.Array.Resize(ref _sph, _nsph * 2);
+                System.Array.Resize(ref _sphK, _nsph * 2);
+                System.Array.Resize(ref _sphOwner, _nsph * 2);
+                System.Array.Resize(ref _sphSeg, _nsph * 2);
+            }
+            _sph[_nsph] = new Vector4(x, y, z, r);
+            _sphK[_nsph] = k;
+            _sphOwner[_nsph] = owner;
+            _nsph++;
+        }
+
+        private static float ChunkRadius(float w)
+        {
+            float aw = Mathf.Abs(w);
+            return aw - 1000f * Mathf.Floor(aw / 1000f);
+        }
+
+        /// <summary>
+        /// "Projection only near joints": a vertex is snapped onto the SDF only if another part's primitive (chunk bound)
+        /// is within its smin radius, or it is near the soil; all other vertices get TMax = 0 (the Surf pass skips them).
+        /// Call after <see cref="Build"/> on the same buffer. Worker-thread safe (no Unity API).
+        /// </summary>
+        public int ClassifySnap(GeoBuffer b, SketchFrame f)
+        {
+            float kr = f.Kr;
+            _nsph = 0;
+            // Chunk spheres; _sphSeg = first point index (DAT) of the chunk's 5 points, segments are p..p+4.
+            for (int c = 0; c < SketchConst.NTC; c++)
+            {
+                int o = (SketchConst.OB + c) * 4;
+                AddSphere(f.Dat[o], f.Dat[o + 1], f.Dat[o + 2], f.Dat[o + 3], kr, -1);
+                _sphSeg[_nsph - 1] = c * 4;
+            }
+            for (int r = 0; r < f.Nr; r++)
+            for (int c = 0; c < SketchConst.RC; c++)
+            {
+                int o = (SketchConst.ORB + r * SketchConst.RC + c) * 4;
+                AddSphere(f.Dat[o], f.Dat[o + 1], f.Dat[o + 2], f.Dat[o + 3], kr, -2 - r);
+                _sphSeg[_nsph - 1] = SketchConst.OR + r * SketchConst.RP + c * 4;
+            }
+            for (int l = 0; l < LimbCount; l++)
+            for (int c = _limbC0[l]; c < _limbC1[l]; c++)
+            {
+                AddSphere(f.Cb[c * 4], f.Cb[c * 4 + 1], f.Cb[c * 4 + 2], ChunkRadius(f.Cb[c * 4 + 3]), _limbK[l], l);
+                _sphSeg[_nsph - 1] = SketchConst.OBR + c * 5;
+            }
+
+            int snap = 0;
+            snap += ClassifyRange(b, f, 0, TrunkVerts, -1);
+            for (int r = 0; r < f.Nr; r++) snap += ClassifyRange(b, f, _rootV0[r], _rootVN[r], -2 - r);
+            for (int l = 0; l < LimbCount; l++) snap += ClassifyRange(b, f, _limbV0[l], _limbVN[l], l);
+            // Soil: only near the trunk/roots (soil/wood smin k = 2).
+            for (int v = _soilV0; v < b.VCount; v++)
+            {
+                if (b.TMax[v] <= 0f) continue;
+                _minDist = 1e9f;
+                if (NearOther(f, b.Pos[v], -100, 2.5f, true))
+                {
+                    snap++;
+                    b.Cost[v] = _minDist < -0.5f ? 30f : 5f;
+                }
+                else
+                {
+                    b.TMax[v] = 0f;
+                    b.Cost[v] = 0.6f;
+                }
+            }
+            SnapVerts = snap;
+            return snap;
+        }
+
+        private int ClassifyRange(GeoBuffer b, SketchFrame f, int v0, int vn, int owner)
+        {
+            int snap = 0;
+            for (int v = v0; v < v0 + vn; v++)
+            {
+                Vector3 p = b.Pos[v];
+                _minDist = 1e9f;
+                bool near = NearOther(f, p, owner, 0.5f, false) || p.y < 2.5f;
+                if (near)
+                {
+                    snap++;
+                    // Buried (inside another part): march fails + projection on the GPU — the expensive texels.
+                    b.Cost[v] = _minDist < -0.5f || p.y < -0.5f ? 30f : 5f;
+                }
+                else
+                {
+                    b.TMax[v] = 0f;
+                    b.Cost[v] = 0.6f;
+                }
+            }
+            return snap;
+        }
+
+        /// <summary>True if a primitive (segment capsule) of another owner is within its smin radius (+extra) of p.</summary>
+        private float _minDist;
+
+        private bool NearOther(SketchFrame f, Vector3 p, int owner, float extra, bool woodBaseOnly)
+        {
+            float[] d = f.Dat;
+            bool found = false;
+            for (int s = 0; s < _nsph; s++)
+            {
+                int ow = _sphOwner[s];
+                if (ow == owner || (woodBaseOnly && ow >= 0)) continue;
+                Vector4 c = _sph[s];
+                float k = woodBaseOnly ? 0f : _sphK[s];
+                float dx = p.x - c.x, dy = p.y - c.y, dz = p.z - c.z;
+                float m = c.w + k + extra;
+                if (dx * dx + dy * dy + dz * dz >= m * m) continue;
+                int i0 = _sphSeg[s];
+                for (int j = 0; j < 4; j++)
+                {
+                    int a = (i0 + j) * 4, bb = (i0 + j + 1) * 4;
+                    float ax = d[a], ay = d[a + 1], az = d[a + 2], ra = d[a + 3];
+                    float bx = d[bb] - ax, by = d[bb + 1] - ay, bz = d[bb + 2] - az, rb = d[bb + 3];
+                    float px = p.x - ax, py = p.y - ay, pz = p.z - az;
+                    float l2 = bx * bx + by * by + bz * bz;
+                    float h = l2 > 1e-8f ? Mathf.Clamp01((px * bx + py * by + pz * bz) / l2) : 0f;
+                    float qx = px - bx * h, qy = py - by * h, qz = pz - bz * h;
+                    float dist = Mathf.Sqrt(qx * qx + qy * qy + qz * qz) - (ra + (rb - ra) * h);
+                    if (dist < _minDist) _minDist = dist;
+                    if (dist < k + extra && dist < -0.5f) return true;
+                    if (dist < k + extra) found = true;
+                }
+            }
+            return found;
+        }
+
+        /// <summary>
+        /// Cut of branch group <paramref name="group"/> (call BEFORE removing it from the frame): per-vertex mask —
+        /// 2 = joint zone (re-snap + light + material), 1 = light only (shadow ray, AO range or canopy of the removed
+        /// branch/pad), 0 = unchanged; vertices of the removed limbs get 0 (no longer drawn). Worker/main safe.
+        /// </summary>
+        public void CutMask(GeoBuffer b, SketchFrame f, int group, Vector3 L, byte[] mask, out int n2, out int n1)
+        {
+            n2 = n1 = 0;
+            System.Array.Clear(mask, 0, b.VCount);
+            if (group < 0 || group >= f.Ng) return;
+            float kg = f.Gm[group * 8 + 4];
+            bool pad = f.Np == f.Nb + 1 && group < f.Nb;
+            float px = 0, py = 0, pz = 0, pr = 0;
+            if (pad)
+            {
+                int o = group * 8;
+                px = f.Pe[o]; py = f.Pe[o + 1]; pz = f.Pe[o + 2];
+                pr = Mathf.Max(f.Pe[o + 3], Mathf.Max(f.Pe[o + 6], f.Pe[o + 7]));
+            }
+            // Removed chunk spheres.
+            _nsph = 0;
+            for (int l = 0; l < LimbCount; l++)
+                if (_limbGroup[l] == group)
+                    for (int c = _limbC0[l]; c < _limbC1[l]; c++)
+                        AddSphere(f.Cb[c * 4], f.Cb[c * 4 + 1], f.Cb[c * 4 + 2], ChunkRadius(f.Cb[c * 4 + 3]), kg, l);
+            int nRemoved = _nsph;
+            // Vertices of removed limbs (this cut and earlier ones) are marked 255 first, then skipped.
+            for (int l = 0; l < LimbCount; l++)
+                if (_limbGroup[l] == group || _limbGroup[l] == RemovedGroup)
+                    for (int v = _limbV0[l]; v < _limbV0[l] + _limbVN[l]; v++) mask[v] = 255;
+            for (int v = 0; v < b.VCount; v++)
+            {
+                if (mask[v] == 255) { mask[v] = 0; continue; }
+                Vector3 p = b.Pos[v];
+                bool joint = false;
+                for (int s = 0; s < nRemoved && !joint; s++)
+                {
+                    Vector4 c = _sph[s];
+                    float dx = p.x - c.x, dy = p.y - c.y, dz = p.z - c.z;
+                    float m = c.w + kg + 1f;
+                    joint = dx * dx + dy * dy + dz * dz < m * m;
+                }
+                if (joint) { mask[v] = 2; n2++; continue; }
+                bool light = pad && RayNear(p, L, px, py, pz, pr, 4f);
+                for (int s = 0; s < nRemoved && !light; s++)
+                {
+                    Vector4 c = _sph[s];
+                    light = RayNear(p, L, c.x, c.y, c.z, c.w, 16f);
+                }
+                if (light)
+                {
+                    mask[v] = 1;
+                    n1++;
+                }
+            }
+        }
+
+        // Within `near` of the sphere, or the shadow ray p + L t passes the sphere with a soft-shadow penumbra.
+        private static bool RayNear(Vector3 p, Vector3 L, float cx, float cy, float cz, float r, float near)
+        {
+            float dx = cx - p.x, dy = cy - p.y, dz = cz - p.z;
+            float d2 = dx * dx + dy * dy + dz * dz;
+            if (d2 < (r + near) * (r + near)) return true;
+            float t = dx * L.x + dy * L.y + dz * L.z;
+            if (t <= 0f) return false;
+            float q2 = d2 - t * t;
+            float m = r + 4f + t * 0.125f;
+            return q2 < m * m;
+        }
+
+        /// <summary>Group id of limbs/chunks already cut away.</summary>
+        public const int RemovedGroup = -2;
+
+        /// <summary>After SketchFrame.RemoveGroup(g): limbs of g become removed, later groups shift down (as in GM).</summary>
+        public void OnGroupRemoved(int g)
+        {
+            for (int l = 0; l < LimbCount; l++)
+            {
+                if (_limbGroup[l] == g) _limbGroup[l] = RemovedGroup;
+                else if (_limbGroup[l] > g) _limbGroup[l]--;
+            }
+            for (int c = 0; c < SketchConst.MAXCH; c++)
+            {
+                if (_chunkGroup[c] == g) _chunkGroup[c] = RemovedGroup;
+                else if (_chunkGroup[c] > g) _chunkGroup[c]--;
+            }
         }
 
         private int PushCp(int n, float[] dat, int idx)

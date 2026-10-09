@@ -43,6 +43,7 @@ namespace PocketArbor.Spike.Editor
         public static void Run()
         {
             string[] keys = KeysFromArgs() ?? DefaultKeys();
+            // Phase 2c: budget is the default preset; quality kept for comparison.
             Execute(keys, true, true, true, false);
             try
             {
@@ -81,8 +82,9 @@ namespace PocketArbor.Spike.Editor
         {
             string ws = GoldenFrameLoader.WorkspaceFolder();
             if (ws == null) throw new DirectoryNotFoundException(".agent-workspace/pa102xs not found from " + Application.dataPath);
-            string outDir = budget ? Path.Combine(ws, "unity", "budget") : Path.Combine(ws, "unity");
-            if (ArgValue("-spikeOut") != null) outDir = Path.Combine(ws, "unity", ArgValue("-spikeOut") + (budget ? "_budget" : ""));
+            // `budget` parameter = the secondary run; since phase 2c that is the QUALITY preset (budget is the default).
+            string sub = ArgValue("-spikeOut") ?? "p2c";
+            string outDir = Path.Combine(ws, "unity", sub + (budget ? "_quality" : ""));
             string dbgDir = Path.Combine(outDir, "debug");
             Directory.CreateDirectory(outDir);
             Directory.CreateDirectory(dbgDir);
@@ -103,12 +105,8 @@ namespace PocketArbor.Spike.Editor
             rt.Create();
             var read = new Texture2D(W * SS, H * SS, TextureFormat.RGBA32, false, false) { hideFlags = HideFlags.HideAndDontSave };
             var tree = new SketchTreeRenderer(null, HideFlags.None);
-            if (budget)
-            {
-                tree.WoodBuilder.UseBudgetPreset();
-                tree.PotVoxel = 2.5f;
-            }
-            Log("tessellation preset: " + (budget ? "budget" : "quality"));
+            if (budget) tree.UseQualityPreset();
+            Log("tessellation preset: " + (budget ? "quality" : "budget (default)") + ", pot voxel " + tree.PotVoxel);
             var frame = new SketchFrame();
             var rows = new List<Row>();
 
@@ -120,7 +118,7 @@ namespace PocketArbor.Spike.Editor
                     LoadFrame(ws, keys[0], frame);
                     var wu = tree.Show(frame);
                     RenderPixels(cam, rt, read);
-                    Log(string.Format(Inv, "warm-up {0}: pot {1:0.0} ms (Surface Nets, voxel {2}), pot {3} verts / {4} tris", keys[0], wu.PotMs, tree.PotVoxel, wu.PotVerts, wu.PotTris));
+                    Log(string.Format(Inv, "warm-up {0}: pot {1:0.0} ms ({2}), pot {3} verts / {4} tris", keys[0], wu.PotMs, tree.ParametricPot ? "parametric, C6" : "Surface Nets, voxel " + tree.PotVoxel.ToString(Inv), wu.PotVerts, wu.PotTris));
                 }
 
                 foreach (string key in keys)
@@ -156,7 +154,7 @@ namespace PocketArbor.Spike.Editor
                 }
 
                 string depthReport = depthTest && !budget ? DepthTest(cam, rt, read, tree, frame, ws, outDir) : "";
-                if (rows.Count > 0) WriteResults(Path.Combine(outDir, "results.md"), rows, depthReport, tree.PotVoxel, budget);
+                if (rows.Count > 0) WriteResults(Path.Combine(outDir, "results.md"), rows, depthReport, tree.ParametricPot ? -1f : tree.PotVoxel, budget);
                 if (sheets) WriteSheets(ws, outDir, rows);
                 if (makeScene && !budget) MakeScene(ws);
             }
@@ -399,10 +397,10 @@ namespace PocketArbor.Spike.Editor
             sb.AppendLine("# PA-102X-S фаза 1 — результати рендеру B* у редакторі Unity");
             sb.AppendLine();
             sb.AppendLine("- Згенеровано: " + DateTime.Now.ToString("yyyy-MM-dd HH:mm", Inv) + ", Unity " + Application.unityVersion + ", GPU " + SystemInfo.graphicsDeviceName + " (" + SystemInfo.graphicsDeviceType + "), batchmode.");
-            sb.AppendLine("- Тесселяція: " + (outDirIsBudget ? "**budget** (грубіша, під бюджет ADR-0011)" : "**quality**") + ".");
+            sb.AppendLine("- Тесселяція: " + (outDirIsBudget ? "**quality** (фаза 1, для порівняння)" : "**budget** (за замовчуванням з фази 2c)") + ".");
             sb.AppendLine("- **Заміри — редактор на Mac (Mono, Debug-код), не мобільні.** Рендер 2720×1920 → 1360×960 (SSAA 2×2), IoU альфи (≥128) проти `refs/`.");
             sb.AppendLine("- Джерело дерева: " + (UseGenerator() ? "C#-порт генератора (TreeGen, G1), gen ms — `SketchGenerator.Scene` (план кешовано)" : "golden-файли ескізу") + ".");
-            sb.AppendLine("- wood ms — побудова мешу деревини+ґрунту (CPU); leaves ms — меш листя з сортуванням front-to-back; upload — data-текстура SDF + глобали; bake — 3 GPU-проходи (snap, light, mat) із синхронізацією (readback); горщик (Surface Nets, воксель " + potVoxel.ToString(Inv) + ") будується раз на породу й тут не враховано.");
+            sb.AppendLine("- wood ms — побудова мешу деревини+ґрунту (CPU); leaves ms — меш листя з сортуванням front-to-back; upload — data-текстура SDF + глобали; bake — 3 GPU-проходи (snap, light, mat) із синхронізацією (readback); горщик (" + (potVoxel < 0f ? "параметричний меш, C6" : "Surface Nets, воксель " + potVoxel.ToString(Inv)) + ") будується раз на породу й тут не враховано.");
             sb.AppendLine();
             sb.AppendLine("| Конфігурація | IoU | лише ескіз px | лише Unity px | gen ms | wood ms | wood verts | wood tris | гілок (limbs) | leaves | leaves ms | upload ms | bake ms (CPU fill+upload / GPU+sync) | render ms | pot tris |");
             sb.AppendLine("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|");

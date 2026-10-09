@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.Threading;
 using UnityEngine;
 
 namespace PocketArbor.Spike.Render
@@ -7,9 +8,16 @@ namespace PocketArbor.Spike.Render
     /// <summary>
     /// B* spike renderer: wood (+soil) mesh, pot mesh, leaves mesh — three MeshRenderers with custom HLSL, depth-tested
     /// in the URP 2D Renderer. Root has localScale z = -1, so all mesh data and shaders stay in sketch space.
-    /// Phase 2a: wood geometry, its bake target and the leaves are double-buffered — a rebuild bakes into the back
-    /// buffers over N frames and swaps; a cut removes the branch's indices on the displayed mesh at once and
-    /// re-bakes the light of the same vertices over N frames; the pot is baked once per pot.
+    /// Phase 2c:
+    ///  * C2 — rebuilds (growth, first show) run the generator, meshes, snap classification and bake-input filling on a
+    ///    worker thread; the main thread only uploads and issues bake slices; meshes are uploaded on the swap frame;
+    ///  * C1 — a cut removes the branch's indices at once and re-bakes only masked vertices (joint zone / light zone),
+    ///    ping-pong between two output sets; the Surf pass projects only flagged vertices (near joints);
+    ///  * C3 — single meshes, compact outputs (16 B/vertex), transient bake inputs freed after each job, budget preset;
+    ///  * the pot is built (worker) and baked once per pot.
+    /// C6 (TA): the pot is a parametric mesh (<see cref="ParametricPotBuilder"/>, exact potD zero set, ≈ 4.5–7 k triangles)
+    /// by default; <see cref="ParametricPot"/> = false keeps the Surface Nets pot (<see cref="PotVoxel"/>) for comparison.
+    /// <see cref="LowEndBark"/> switches the wood material to the SK_BARK_LOW variant (one Voronoi, analytic relief).
     /// </summary>
     public sealed class SketchTreeRenderer : IDisposable
     {
@@ -22,40 +30,115 @@ namespace PocketArbor.Spike.Render
         public static Func<string, Shader> ShaderLookup;
 
         private static readonly int IdNoBake = Shader.PropertyToID("_SkNoBake");
+        private static readonly int IdPotMeshNrm = Shader.PropertyToID("_SkPotMeshNrm");
+        public const string BarkLowKeyword = "SK_BARK_LOW";
 
         public struct Stats
         {
-            public double WoodMs, PotMs, LeafMs, UploadMs, BakeMs, BakeFillMs, BakeGpuMs;
-            public int WoodVerts, WoodTris, PotVerts, PotTris, Leaves, Limbs;
+            public double WoodMs, PotMs, LeafMs, UploadMs, BakeMs, BakeFillMs, BakeGpuMs, ClassifyMs, GenMs;
+            public int WoodVerts, WoodTris, PotVerts, PotTris, Leaves, Limbs, SnapVerts;
             public int TrunkVerts, RootVerts, LimbVerts, SoilVerts;
         }
 
-        private enum Pending { None, Rebuild, Rebake }
+        public struct CutStats
+        {
+            public double CpuMs, MaskMs, UploadMs;
+            public int Joint, LightOnly, Vertices;
+        }
+
+        private enum Job { None, PotBake, PotDone, WoodBake, CutBake }
 
         public readonly GameObject Root;
         public readonly MeshRenderer Wood, Pot, Leaves;
-        private readonly MeshFilter _woodMf, _leafMf;
-        private readonly Mesh[] _woodMesh = new Mesh[2], _leafMesh = new Mesh[2];
-        private readonly GeoBuffer[] _woodGeo = { new GeoBuffer(1 << 16, 1 << 18), new GeoBuffer(1 << 16, 1 << 18) };
-        private readonly BakeTarget[] _woodBake = { new BakeTarget("PA102XS_WoodA"), new BakeTarget("PA102XS_WoodB") };
-        private readonly LeafMeshBuilder[] _leaf = { new LeafMeshBuilder(), new LeafMeshBuilder() };
-        private readonly Mesh _potMesh;
-        private readonly GeoBuffer _potGeo = new GeoBuffer(1 << 16, 1 << 18);
-        private readonly BakeTarget _potBake = new BakeTarget("PA102XS_Pot");
+        private readonly Mesh _woodMesh, _leafMesh, _potMesh;
         private readonly Material _woodMat, _potMat, _leafMat;
-        private readonly WoodMeshBuilder _wood = new WoodMeshBuilder();
         private readonly SdfBaker _baker;
         private readonly MaterialPropertyBlock _woodMpb = new MaterialPropertyBlock(), _potMpb = new MaterialPropertyBlock();
-        private readonly SketchFrame _cur = new SketchFrame();
-        private int _dispMesh, _dispBake, _pendMesh, _pendBake;
-        private Pending _pending;
-        private string _potKey;
+
+        // Displayed state.
+        private GeoBuffer _geo = new GeoBuffer(1 << 15, 1 << 17), _geoNext = new GeoBuffer(1 << 15, 1 << 17);
+        private WoodMeshBuilder _wood = new WoodMeshBuilder(), _woodNext = new WoodMeshBuilder();
+        private LeafMeshBuilder _leaf = new LeafMeshBuilder(), _leafNext = new LeafMeshBuilder();
+        private SketchFrame _cur = new SketchFrame(), _next = new SketchFrame();
+        private readonly BakeOutputs[] _out = { new BakeOutputs("PA102XS_WoodA"), new BakeOutputs("PA102XS_WoodB") };
+        private int _disp;
+        private readonly BakeOutputs _potOut = new BakeOutputs("PA102XS_Pot");
+        private readonly BakeInputs _in = new BakeInputs("PA102XS_In");
+        private readonly BakeInputs _potIn = new BakeInputs("PA102XS_PotIn");
+        private readonly GeoBuffer _potGeo = new GeoBuffer(1 << 15, 1 << 17);
+        private SpeciesLook _potLook, _potLookNext;
+        private bool _potDirty;
+        private readonly ParametricPotBuilder _potBuilder = new ParametricPotBuilder();
+        private bool _parametricPot = true, _potParamNext, _potShownParam;
+
+        // Worker (C2).
+        private readonly Thread _worker;
+        private readonly AutoResetEvent _go = new AutoResetEvent(false);
+        private volatile bool _workerBusy, _quit;
+        private volatile Exception _workerError;
+        private bool _workPending;
+        private string _reqSpecies, _reqStyle;
+        private int _reqSeed;
+        private float _reqT;
+        private bool _reqGenerate;
+        private Stats _jobStats;
+        private enum WorkMode { Rebuild, CutMask }
+        private WorkMode _workMode;
+        private int _cutGroupReq, _cutFramesReq, _maskJoint, _maskLight;
+        private double _maskMs;
+        public double LastCutMaskMs => _maskMs;
+        public int LastMaskJoint => _maskJoint;
+        public int LastMaskLight => _maskLight;
+
+        // Jobs.
+        private Job _job;
+        private int _jobFrames;
         private int[] _cutIdx, _cutLeafIdx;
-        private bool[] _leafRemoved = new bool[SketchConst.MAXLEAF];
-        private int[] _leafGroup = new int[SketchConst.MAXLEAF];
+        private readonly bool[] _leafRemoved = new bool[SketchConst.MAXLEAF];
+        private readonly int[] _leafGroup = new int[SketchConst.MAXLEAF];
+        private long _peakBytes;
 
         public bool FrontToBackLeaves = true;
-        public float PotVoxel = 1.5f;
+        public float PotVoxel = 2.0f;
+
+        /// <summary>C6: parametric pot mesh (default) or Surface Nets (comparison). Set between rebuilds; forces a pot rebuild.</summary>
+        public bool ParametricPot
+        {
+            get => _parametricPot;
+            set
+            {
+                if (_parametricPot == value) return;
+                FinishAllNow();
+                _parametricPot = value;
+                _potLook = null;
+            }
+        }
+
+        /// <summary>C6: shade the parametric pot with the interpolated mesh normal (default) instead of the per-pixel potD gradient.</summary>
+        public bool PotMeshNormals = true;
+
+        public ParametricPotBuilder PotBuilder => _potBuilder;
+
+        /// <summary>Re-applies <see cref="PotMeshNormals"/> to the displayed pot (no rebuild, no re-bake).</summary>
+        public void RefreshPotShading()
+        {
+            _potMpb.SetFloat(IdPotMeshNrm, _potShownParam && PotMeshNormals ? 1f : 0f);
+            Pot.SetPropertyBlock(_potMpb);
+        }
+
+        /// <summary>C6: LowEnd bark (SK_BARK_LOW): one Voronoi per pixel for Kuromatsu, analytic relief for all species.</summary>
+        public bool LowEndBark
+        {
+            get => _woodMat.IsKeywordEnabled(BarkLowKeyword);
+            set
+            {
+                if (value) _woodMat.EnableKeyword(BarkLowKeyword);
+                else _woodMat.DisableKeyword(BarkLowKeyword);
+            }
+        }
+        public int RebuildFrames = 60;
+        /// <summary>Main-thread ms of the last "worker done" Tick: scene upload, inputs upload, slicing setup.</summary>
+        public double LastUploadSceneMs, LastUploadInputsMs, LastBeginSliceMs;
 
         public SketchTreeRenderer(Transform parent, HideFlags flags = HideFlags.DontSave)
         {
@@ -65,24 +148,28 @@ namespace PocketArbor.Spike.Render
             _woodMat = NewMat(WoodShader);
             _potMat = NewMat(PotShader);
             _leafMat = NewMat(LeafShader);
-            for (int i = 0; i < 2; i++)
-            {
-                _woodMesh[i] = NewMesh("PA102XS_Wood" + i);
-                _leafMesh[i] = NewMesh("PA102XS_Leaves" + i);
-            }
+            _woodMesh = NewMesh("PA102XS_Wood");
+            _leafMesh = NewMesh("PA102XS_Leaves");
             _potMesh = NewMesh("PA102XS_Pot");
-            Wood = NewPart("Wood", _woodMesh[0], _woodMat, 0, flags, out _woodMf);
-            Pot = NewPart("Pot", _potMesh, _potMat, 0, flags, out _);
-            Leaves = NewPart("Leaves", _leafMesh[0], _leafMat, 1, flags, out _leafMf);
+            Wood = NewPart("Wood", _woodMesh, _woodMat, 0, flags);
+            Pot = NewPart("Pot", _potMesh, _potMat, 0, flags);
+            Leaves = NewPart("Leaves", _leafMesh, _leafMat, 1, flags);
             _baker = new SdfBaker(FindShader(BakeShader));
+            _worker = new Thread(WorkerLoop) { IsBackground = true, Name = "PA102XS Rebuild", Priority = System.Threading.ThreadPriority.BelowNormal };
+            _worker.Start();
         }
 
         public SdfBaker Baker => _baker;
-        public BakeTarget DisplayedBake => _woodBake[_dispBake];
         public WoodMeshBuilder WoodBuilder => _wood;
         public SketchFrame Current => _cur;
-        public bool Busy => _pending != Pending.None;
-        public int DisplayedLeafCount => _leaf[_dispMesh].Count;
+        public bool Busy => _job != Job.None || _workPending;
+        public int DisplayedLeafCount => _leaf.Count;
+        public Stats LastJobStats => _jobStats;
+        public long PeakGpuBytes => _peakBytes;
+
+        /// <summary>Sets the tessellation of both builders (displayed and next).</summary>
+        public void UseQualityPreset() { _wood.UseQualityPreset(); _woodNext.UseQualityPreset(); }
+        public void UseBudgetPreset() { _wood.UseBudgetPreset(); _woodNext.UseBudgetPreset(); }
 
         public static Shader FindShader(string name)
         {
@@ -101,12 +188,11 @@ namespace PocketArbor.Spike.Render
             return m;
         }
 
-        private MeshRenderer NewPart(string name, Mesh mesh, Material mat, int order, HideFlags flags, out MeshFilter mf)
+        private MeshRenderer NewPart(string name, Mesh mesh, Material mat, int order, HideFlags flags)
         {
             var go = new GameObject(name) { hideFlags = flags };
             go.transform.SetParent(Root.transform, false);
-            mf = go.AddComponent<MeshFilter>();
-            mf.sharedMesh = mesh;
+            go.AddComponent<MeshFilter>().sharedMesh = mesh;
             var mr = go.AddComponent<MeshRenderer>();
             mr.sharedMaterial = mat;
             mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
@@ -115,71 +201,152 @@ namespace PocketArbor.Spike.Render
             return mr;
         }
 
-        // ------------------------------------------------------------------ synchronous (editor harness, first show)
+        // ------------------------------------------------------------------ synchronous (editor harness, tools)
 
-        /// <summary>Builds and bakes everything now and displays it.</summary>
+        /// <summary>Builds and bakes everything now and displays it (main thread only).</summary>
         public Stats Show(SketchFrame f)
         {
-            Stats st = BuildBack(f);
+            FinishAllNow();
+            _next.CopyFrom(f);
+            _reqGenerate = false;
+            BuildNext();
+            Stats st = _jobStats;
             var sw = Stopwatch.StartNew();
-            st.BakeFillMs = _woodBake[_pendBake].Fill(_woodGeo[_pendMesh]);
-            double gpu = _baker.BakeFull(_woodBake[_pendBake], true);
-            st.BakeGpuMs = gpu;
-            st.BakeMs = sw.Elapsed.TotalMilliseconds;
-            _pending = Pending.Rebuild;
-            Swap();
+            SpeciesLook look = SpeciesLook.For(_next.Species, _next.Style);
+            _baker.UploadScene(_next, look);
+            st.UploadMs = sw.Elapsed.TotalMilliseconds;
+            if (_potDirty)
+            {
+                sw.Restart();
+                _potIn.Upload(false);
+                _baker.BakeFull(_potIn, _potOut, false);
+                FinishPot();
+                st.PotMs += sw.Elapsed.TotalMilliseconds;
+            }
+            sw.Restart();
+            _in.Upload(false);
+            st.BakeFillMs += sw.Elapsed.TotalMilliseconds;
+            BakeOutputs back = _out[1 - _disp];
+            st.BakeGpuMs = _baker.BakeFull(_in, back, true);
+            st.BakeMs = st.BakeFillMs + st.BakeGpuMs;
+            TrackPeak();
+            SwapRebuild();
+            _jobStats = st;
             return st;
         }
 
-        // ------------------------------------------------------------------ sliced (device)
+        // ------------------------------------------------------------------ asynchronous (device)
 
-        /// <summary>Daily growth: builds geometry/leaves into the back buffers now, bakes over <paramref name="frames"/> Tick()s, then swaps.</summary>
-        public Stats BeginRebuild(SketchFrame f, int frames)
+        /// <summary>Daily growth / first show: everything heavy on the worker, then sliced bake, then swap.</summary>
+        public void BeginRebuild(SketchFrame f, int frames)
         {
-            Stats st = BuildBack(f);
-            var sw = Stopwatch.StartNew();
-            st.BakeFillMs = _woodBake[_pendBake].Fill(_woodGeo[_pendMesh]);
-            _baker.BeginSliced(_woodBake[_pendBake], frames);
-            _pending = Pending.Rebuild;
-            st.BakeMs = sw.Elapsed.TotalMilliseconds;
-            return st;
+            FinishAllNow();
+            _next.CopyFrom(f);
+            _reqGenerate = false;
+            KickWorker(frames);
         }
 
-        /// <summary>Call once per frame. Returns true on the frame the new light/geometry became visible.</summary>
+        /// <summary>Same, but the worker also runs the generator (TreeGen) — nothing heavy on the main thread.</summary>
+        public void BeginRebuild(string species, string style, int seed, float t, int frames)
+        {
+            FinishAllNow();
+            _reqSpecies = species;
+            _reqStyle = style;
+            _reqSeed = seed;
+            _reqT = t;
+            _reqGenerate = true;
+            KickWorker(frames);
+        }
+
+        private void KickWorker(int frames)
+        {
+            _workMode = WorkMode.Rebuild;
+            _jobFrames = frames;
+            _workPending = true;
+            _workerBusy = true;
+            _go.Set();
+        }
+
+        /// <summary>Call once per frame. Returns true on the frame the rebuilt tree / re-baked light became visible.</summary>
         public bool Tick()
         {
-            if (_pending == Pending.None) return false;
+            if (_workPending)
+            {
+                if (_workerBusy) return false;
+                _workPending = false;
+                if (_workerError != null)
+                {
+                    Exception e = _workerError;
+                    _workerError = null;
+                    throw new InvalidOperationException("rebuild worker failed", e);
+                }
+                if (_workMode == WorkMode.CutMask)
+                {
+                    // Mask ready (worker): drop the group from the SDF, upload, re-bake masked texels into the back outputs.
+                    _cur.RemoveGroup(_cutGroupReq);
+                    _wood.OnGroupRemoved(_cutGroupReq);
+                    _baker.UploadScene(_cur, SpeciesLook.For(_cur.Species, _cur.Style));
+                    _in.Upload(true);
+                    _baker.BeginSliced(_in, _out[1 - _disp], _out[_disp], Math.Max(1, _cutFramesReq - 1));
+                    _job = Job.CutBake;
+                    return false;
+                }
+                // Worker done: upload scene + inputs, start the slices (pot first if it changed).
+                double k = 1000.0 / Stopwatch.Frequency;
+                long a0 = Stopwatch.GetTimestamp();
+                SpeciesLook look = SpeciesLook.For(_next.Species, _next.Style);
+                _baker.UploadScene(_next, look);
+                long a1 = Stopwatch.GetTimestamp();
+                LastUploadSceneMs = (a1 - a0) * k;
+                if (_potDirty)
+                {
+                    _potIn.Upload(false);
+                    long a2 = Stopwatch.GetTimestamp();
+                    _baker.BeginSliced(_potIn, _potOut, null, Math.Max(4, _jobFrames / 4));
+                    LastUploadInputsMs = (a2 - a1) * k;
+                    LastBeginSliceMs = (Stopwatch.GetTimestamp() - a2) * k;
+                    _job = Job.PotBake;
+                }
+                else StartWoodJob();
+                return false;
+            }
+            if (_job == Job.None) return false;
+            TrackPeak();
+            if (_job == Job.PotDone)
+            {
+                // Separate frame from the pot mesh upload.
+                StartWoodJob();
+                return false;
+            }
             if (!_baker.Step()) return false;
-            Swap();
-            return true;
+            switch (_job)
+            {
+                case Job.PotBake:
+                    FinishPot();
+                    _potIn.ReleaseGpu();
+                    _job = Job.PotDone;
+                    return false;
+                case Job.WoodBake:
+                    _in.ReleaseGpu();
+                    SwapRebuild();
+                    _job = Job.None;
+                    return true;
+                case Job.CutBake:
+                    _in.ReleaseGpu();
+                    _out[_disp].Release();
+                    _disp = 1 - _disp;
+                    BindWood();
+                    _job = Job.None;
+                    return true;
+            }
+            return false;
         }
 
-        /// <summary>
-        /// Cut: the displayed tree loses branch group <paramref name="group"/> (wood limbs + its leaves) in this call
-        /// (visible next frame); the SDF drops the group and its pad; light of the same vertices is re-baked into the
-        /// back target over <paramref name="frames"/> Tick()s. Returns CPU ms of the immediate part.
-        /// <see cref="PrepareCut"/> must have been called for the displayed tree (leaf → branch assignment).
-        /// </summary>
-        public double Cut(int group, int frames)
+        private void StartWoodJob()
         {
-            var sw = Stopwatch.StartNew();
-            GeoBuffer g = _woodGeo[_dispMesh];
-            int n = _wood.IndicesWithoutGroup(g, group, ref _cutIdx);
-            Mesh wm = _woodMesh[_dispMesh];
-            wm.SetIndices(_cutIdx, 0, n, MeshTopology.Triangles, 0, false);
-            LeafMeshBuilder lb = _leaf[_dispMesh];
-            for (int i = 0; i < _cur.Nl; i++) _leafRemoved[i] = _leafGroup[i] == group;
-            int ln = lb.IndicesWithout(_leafRemoved, ref _cutLeafIdx);
-            _leafMesh[_dispMesh].SetIndices(_cutLeafIdx, 0, ln, MeshTopology.Triangles, 0, false);
-            _cur.RemoveGroup(group);
-            SpeciesLook look = SpeciesLook.For(_cur.Species, _cur.Style);
-            _baker.UploadScene(_cur, look);
-            _pendBake = 1 - _dispBake;
-            _pendMesh = _dispMesh;
-            _woodBake[_pendBake].CopyInputFrom(_woodBake[_dispBake]);
-            _baker.BeginSliced(_woodBake[_pendBake], frames);
-            _pending = Pending.Rebake;
-            return sw.Elapsed.TotalMilliseconds;
+            _in.Upload(false);
+            _baker.BeginSliced(_in, _out[1 - _disp], null, _jobFrames);
+            _job = Job.WoodBake;
         }
 
         /// <summary>Leaf → branch group (nearest limb segment); in the game leaves would carry their branch id.</summary>
@@ -213,124 +380,213 @@ namespace PocketArbor.Spike.Render
                 }
                 _leafGroup[i] = bg;
             }
+            // Pre-size the cut buffers (K3: the cut itself must not allocate).
+            if (_cutIdx == null || _cutIdx.Length < _geo.ICount) _cutIdx = new int[_geo.ICount];
+            if (_cutLeafIdx == null || _cutLeafIdx.Length < _leaf.Count * 6) _cutLeafIdx = new int[Math.Max(6, _leaf.Count * 6)];
+        }
+
+        /// <summary>
+        /// Cut (C1): the displayed tree loses branch group <paramref name="group"/> (limbs + its leaves) in this call
+        /// (visible next frame). Only vertices whose bake can change are re-baked (mask), over <paramref name="frames"/>
+        /// Tick()s, into the back outputs; the rest is copied. <see cref="PrepareCut"/> first.
+        /// </summary>
+        public CutStats Cut(int group, int frames)
+        {
+            FinishAllNow();
+            var st = new CutStats();
+            long t0 = Stopwatch.GetTimestamp();
+            int n = _wood.IndicesWithoutGroup(_geo, group, ref _cutIdx);
+            _woodMesh.SetIndices(_cutIdx, 0, n, MeshTopology.Triangles, 0, false);
+            for (int i = 0; i < _cur.Nl; i++)
+                _leafRemoved[i] = _leafRemoved[i] || _leafGroup[i] == group || _leafGroup[i] == WoodMeshBuilder.RemovedGroup;
+            int ln = _leaf.IndicesWithout(_leafRemoved, ref _cutLeafIdx);
+            _leafMesh.SetIndices(_cutLeafIdx, 0, ln, MeshTopology.Triangles, 0, false);
+            // Mask on the worker (C1/K4: the cut frame only swaps index buffers); light = 1 worker frame + slices.
+            _cutGroupReq = group;
+            _cutFramesReq = frames;
+            _workMode = WorkMode.CutMask;
+            _workPending = true;
+            _workerBusy = true;
+            _go.Set();
+            st.Vertices = _geo.VCount;
+            st.CpuMs = (Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency;
+            return st;
+        }
+
+        private void ComputeCutMask()
+        {
+            long t0 = Stopwatch.GetTimestamp();
+            _wood.CutMask(_geo, _cur, _cutGroupReq, _cur.LightDir, _in.MaskData, out _maskJoint, out _maskLight);
+            _in.SetMaskCosts(_in.MaskData, _geo.VCount, _geo.Cost);
+            _maskMs = (Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency;
         }
 
         /// <summary>Chronicle / scrubbing: geometry and leaves rebuilt and shown at once, no bake (_SkNoBake).</summary>
         public Stats ShowNoBake(SketchFrame f)
         {
-            Stats st = BuildBack(f);
-            _woodMpb.SetFloat(IdNoBake, 1f);
-            _dispMesh = _pendMesh;
-            _woodMf.sharedMesh = _woodMesh[_dispMesh];
-            _leafMf.sharedMesh = _leafMesh[_dispMesh];
-            Wood.SetPropertyBlock(_woodMpb);
-            _pending = Pending.None;
-            return st;
-        }
-
-        // ------------------------------------------------------------------ internals
-
-        private Stats BuildBack(SketchFrame f)
-        {
-            if (_pending != Pending.None) FinishPendingNow();
+            FinishAllNow();
             var st = new Stats();
+            long t0 = Stopwatch.GetTimestamp();
             _cur.CopyFrom(f);
             SpeciesLook look = SpeciesLook.For(f.Species, f.Style);
-            var sw = Stopwatch.StartNew();
-            _baker.UploadScene(f, look);
-            st.UploadMs = sw.Elapsed.TotalMilliseconds;
-
-            if (_potKey != look.PotKey)
-            {
-                sw.Restart();
-                BuildPot(look);
-                _potKey = look.PotKey;
-                st.PotMs = sw.Elapsed.TotalMilliseconds;
-            }
-
-            _pendMesh = 1 - _dispMesh;
-            _pendBake = 1 - _dispBake;
-            GeoBuffer g = _woodGeo[_pendMesh];
-            sw.Restart();
-            _wood.Build(f, look, g);
-            g.AssignBakeTexels(0, SdfBaker.Width);
-            g.ApplyTo(_woodMesh[_pendMesh], 8f);
-            st.WoodMs = sw.Elapsed.TotalMilliseconds;
-            st.Limbs = _wood.LimbCount;
-            st.TrunkVerts = _wood.TrunkVerts;
-            st.RootVerts = _wood.RootVerts;
-            st.LimbVerts = _wood.LimbVerts;
-            st.SoilVerts = _wood.SoilVerts;
-
-            sw.Restart();
-            st.Leaves = _leaf[_pendMesh].Build(f, _leafMesh[_pendMesh], FrontToBackLeaves);
-            st.LeafMs = sw.Elapsed.TotalMilliseconds;
-
-            st.WoodVerts = g.VCount;
-            st.WoodTris = g.TriangleCount;
-            st.PotVerts = _potGeo.VCount;
-            st.PotTris = _potGeo.TriangleCount;
+            SketchGlobals.Set(f, look);
+            _wood.Build(f, look, _geo);
+            _geo.AssignBakeTexels(0, SdfBaker.Width);
+            _geo.ApplyTo(_woodMesh, 8f);
+            long t1 = Stopwatch.GetTimestamp();
+            _leaf.Fill(f, FrontToBackLeaves);
+            _leaf.Apply(_leafMesh);
+            long t2 = Stopwatch.GetTimestamp();
+            _woodMpb.SetFloat(IdNoBake, 1f);
+            Wood.SetPropertyBlock(_woodMpb);
+            double ms = 1000.0 / Stopwatch.Frequency;
+            st.WoodMs = (t1 - t0) * ms;
+            st.LeafMs = (t2 - t1) * ms;
+            st.Leaves = _leaf.Count;
+            st.WoodTris = _geo.TriangleCount;
             return st;
         }
 
-        private void FinishPendingNow()
+        // ------------------------------------------------------------------ worker
+
+        private void WorkerLoop()
         {
-            while (!_baker.Step()) { }
-            Swap();
+            while (true)
+            {
+                _go.WaitOne();
+                if (_quit) return;
+                try
+                {
+                    if (_workMode == WorkMode.CutMask) ComputeCutMask();
+                    else BuildNext();
+                }
+                catch (Exception e) { _workerError = e; }
+                _workerBusy = false;
+            }
         }
 
-        private void Swap()
+        /// <summary>Everything CPU-heavy for the next tree (worker thread, or main thread in Show). No Unity API.</summary>
+        private void BuildNext()
         {
-            if (_pending == Pending.Rebuild)
+            var st = new Stats();
+            double ms = 1000.0 / Stopwatch.Frequency;
+            long t = Stopwatch.GetTimestamp();
+            if (_reqGenerate) TreeGenAdapter.Generate(_reqSpecies, _reqStyle, _reqSeed, _reqT, _next);
+            long t0 = Stopwatch.GetTimestamp();
+            st.GenMs = (t0 - t) * ms;
+            SpeciesLook look = SpeciesLook.For(_next.Species, _next.Style);
+            if (!look.SamePot(_potLook))
             {
-                _dispMesh = _pendMesh;
-                _woodMf.sharedMesh = _woodMesh[_dispMesh];
-                _leafMf.sharedMesh = _leafMesh[_dispMesh];
+                _potGeo.Clear();
+                _potParamNext = _parametricPot;
+                if (_parametricPot) _potBuilder.Build(look, _potGeo);
+                else
+                {
+                    var sdf = new PotSdf(look);
+                    float hw = look.PotHw + 8f, hd = look.PotHd + 8f;
+                    Vector3 min = new Vector3(-hw, -look.PotDep - 9f, -hd), max = new Vector3(hw, 6.5f, hd);
+                    SurfaceNets.Build(sdf, min, max, PotVoxel, _potGeo, 2f, p => p.y < -1f && sdf.Inner(p.x, p.y, p.z) < 0.6f);
+                }
+                _potGeo.AssignBakeTexels(0, SdfBaker.Width);
+                _potIn.Fill(_potGeo);
+                _potLookNext = look;
+                _potDirty = true;
             }
-            _dispBake = _pendBake;
-            _woodBake[_dispBake].Bind(_woodMpb);
+            long t1 = Stopwatch.GetTimestamp();
+            _woodNext.Build(_next, look, _geoNext);
+            long t2 = Stopwatch.GetTimestamp();
+            st.SnapVerts = _woodNext.ClassifySnap(_geoNext, _next);
+            _geoNext.AssignBakeTexels(0, SdfBaker.Width);
+            long t3 = Stopwatch.GetTimestamp();
+            _leafNext.Fill(_next, FrontToBackLeaves);
+            long t4 = Stopwatch.GetTimestamp();
+            _in.Fill(_geoNext);
+            long t5 = Stopwatch.GetTimestamp();
+            st.PotMs = (t1 - t0) * ms;
+            st.WoodMs = (t2 - t1) * ms;
+            st.ClassifyMs = (t3 - t2) * ms;
+            st.LeafMs = (t4 - t3) * ms;
+            st.BakeFillMs = (t5 - t4) * ms;
+            st.WoodVerts = _geoNext.VCount;
+            st.WoodTris = _geoNext.TriangleCount;
+            st.Leaves = _leafNext.Count;
+            st.Limbs = _woodNext.LimbCount;
+            st.TrunkVerts = _woodNext.TrunkVerts;
+            st.RootVerts = _woodNext.RootVerts;
+            st.LimbVerts = _woodNext.LimbVerts;
+            st.SoilVerts = _woodNext.SoilVerts;
+            st.PotVerts = _potGeo.VCount;
+            st.PotTris = _potGeo.TriangleCount;
+            _jobStats = st;
+        }
+
+        // ------------------------------------------------------------------ swap & helpers
+
+        private void FinishPot()
+        {
+            _potGeo.ApplyTo(_potMesh, 1f);
+            _potOut.Bind(_potMpb);
+            _potMpb.SetFloat(IdNoBake, 0f);
+            _potShownParam = _potParamNext;
+            _potMpb.SetFloat(IdPotMeshNrm, _potShownParam && PotMeshNormals ? 1f : 0f);
+            Pot.SetPropertyBlock(_potMpb);
+            _potLook = _potLookNext;
+            _potDirty = false;
+        }
+
+        /// <summary>Swap frame of a rebuild: upload the new meshes (single buffers), flip outputs, adopt the next state.</summary>
+        private void SwapRebuild()
+        {
+            _geoNext.ApplyTo(_woodMesh, 8f);
+            _leafNext.Apply(_leafMesh);
+            Swap(ref _geo, ref _geoNext);
+            Swap(ref _wood, ref _woodNext);
+            Swap(ref _leaf, ref _leafNext);
+            Swap(ref _cur, ref _next);
+            Array.Clear(_leafRemoved, 0, _leafRemoved.Length);
+            _out[_disp].Release();
+            _disp = 1 - _disp;
+            BindWood();
+            // Display globals (age, species, pot) follow the displayed tree.
+            SketchGlobals.Set(_cur, SpeciesLook.For(_cur.Species, _cur.Style));
+        }
+
+        private void BindWood()
+        {
+            _out[_disp].Bind(_woodMpb);
             _woodMpb.SetFloat(IdNoBake, 0f);
             Wood.SetPropertyBlock(_woodMpb);
-            _pending = Pending.None;
         }
 
-        private void BuildPot(SpeciesLook look)
+        private static void Swap<T>(ref T a, ref T b)
         {
-            var sdf = new PotSdf(look);
-            _potGeo.Clear();
-            float hw = look.PotHw + 8f, hd = look.PotHd + 8f;
-            Vector3 min = new Vector3(-hw, -look.PotDep - 9f, -hd), max = new Vector3(hw, 6.5f, hd);
-            // Cavity walls and bottom below the soil (y < -1) are never visible.
-            SurfaceNets.Build(sdf, min, max, PotVoxel, _potGeo, 2f, p => p.y < -1f && sdf.Inner(p.x, p.y, p.z) < 0.6f);
-            _potGeo.AssignBakeTexels(0, SdfBaker.Width);
-            _potGeo.ApplyTo(_potMesh, 1f);
-            // Baked once per pot (with the tree of that moment), not on every tree change.
-            _potBake.Fill(_potGeo);
-            _baker.BakeFull(_potBake, false);
-            _potBake.Bind(_potMpb);
-            _potMpb.SetFloat(IdNoBake, 0f);
-            Pot.SetPropertyBlock(_potMpb);
+            T t = a;
+            a = b;
+            b = t;
         }
 
-        public void SetOrders(int wood, int pot, int leaves)
+        private void FinishAllNow()
         {
-            Wood.sortingOrder = wood;
-            Pot.sortingOrder = pot;
-            Leaves.sortingOrder = leaves;
-        }
-
-        /// <summary>Estimated GPU memory of the tree: meshes (both buffers), bake targets, SDF texture.</summary>
-        public long GpuBytesEstimate()
-        {
-            long b = 0;
-            for (int i = 0; i < 2; i++)
+            while (_workPending || _job != Job.None)
             {
-                b += MeshBytes(_woodMesh[i], 36);
-                b += MeshBytes(_leafMesh[i], 72);
-                b += _woodBake[i].GpuBytes;
+                if (_workPending && _workerBusy) { Thread.Sleep(1); continue; }
+                Tick();
             }
-            b += MeshBytes(_potMesh, 36) + _potBake.GpuBytes + _baker.SdfBytes;
-            return b;
+        }
+
+        private void TrackPeak()
+        {
+            long b = GpuBytes();
+            if (b > _peakBytes) _peakBytes = b;
+        }
+
+        public void ResetPeak() { _peakBytes = GpuBytes(); }
+
+        /// <summary>GPU memory of the tree (meshes + bake outputs + transient inputs + SDF texture), from buffer sizes.</summary>
+        public long GpuBytes()
+        {
+            return MeshBytes(_woodMesh, 36) + MeshBytes(_leafMesh, 72) + MeshBytes(_potMesh, 36)
+                 + _out[0].GpuBytes + _out[1].GpuBytes + _potOut.GpuBytes + _in.GpuBytes + _potIn.GpuBytes + _baker.SdfBytes;
         }
 
         private static long MeshBytes(Mesh m, int stride)
@@ -340,16 +596,37 @@ namespace PocketArbor.Spike.Render
             return (long)m.vertexCount * stride + idx * (m.indexFormat == UnityEngine.Rendering.IndexFormat.UInt32 ? 4 : 2);
         }
 
+        public void SetOrders(int wood, int pot, int leaves)
+        {
+            Wood.sortingOrder = wood;
+            Pot.sortingOrder = pot;
+            Leaves.sortingOrder = leaves;
+        }
+
+        /// <summary>Bake profiling on device: one pass over the displayed geometry (re-uploads the inputs).</summary>
+        public double TimeBakePass(int pass)
+        {
+            _in.Fill(_geo);
+            _in.Upload(false);
+            double ms = _baker.TimePass(_in, _out[_disp], pass);
+            return ms;
+        }
+
+        public void ReleaseProfilingInputs() { _in.ReleaseGpu(); }
+
         public void Dispose()
         {
+            _quit = true;
+            _go.Set();
+            _worker.Join(1000);
             _baker.Dispose();
-            for (int i = 0; i < 2; i++)
-            {
-                _woodBake[i].Dispose();
-                Destroy(_woodMesh[i]);
-                Destroy(_leafMesh[i]);
-            }
-            _potBake.Dispose();
+            _out[0].Dispose();
+            _out[1].Dispose();
+            _potOut.Dispose();
+            _in.Dispose();
+            _potIn.Dispose();
+            Destroy(_woodMesh);
+            Destroy(_leafMesh);
             Destroy(_potMesh);
             Destroy(_woodMat);
             Destroy(_potMat);

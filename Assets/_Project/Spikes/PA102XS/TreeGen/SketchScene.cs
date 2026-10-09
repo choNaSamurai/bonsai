@@ -90,7 +90,31 @@ namespace PocketArbor.Spike.TreeGen
         /// <summary>uKr = 0.28*R + 0.5.</summary>
         public double Kr => 0.28 * R + 0.5;
 
-        public string Key => MakeKey(SpeciesKey, Style, Seed, T);
+        /// <summary>Golden key of the current state; the string is cached and rebuilt only when the key changes.</summary>
+        public string Key
+        {
+            get
+            {
+                int t100 = (int)Math.Floor(T * 100 + 0.5);
+                if (_key == null || t100 != _keyT100 || Seed != _keySeed || !string.Equals(SpeciesKey, _keySpecies, StringComparison.Ordinal)
+                    || !string.Equals(Style, _keyStyle, StringComparison.Ordinal))
+                {
+                    _key = MakeKey(SpeciesKey, Style, Seed, T);
+                    _keyT100 = t100;
+                    _keySeed = Seed;
+                    _keySpecies = SpeciesKey;
+                    _keyStyle = Style;
+                }
+
+                return _key;
+            }
+        }
+
+        private string _key, _keySpecies, _keyStyle;
+        private int _keyT100, _keySeed;
+
+        /// <summary>Generator scratch state (C5: allocated once, reused by every SketchGenerator.Scene call on this scene).</summary>
+        internal SketchGenerator.Ctx Work;
 
         /// <summary>Golden key: species_style_s{seed}_t{round(t*100)}.</summary>
         public static string MakeKey(string species, string style, int seed, double t)

@@ -56,7 +56,6 @@ namespace PocketArbor.Spike.Render
         {
             JRoot j = JsonUtility.FromJson<JRoot>(File.ReadAllText(jsonPath));
             byte[] bin = File.ReadAllBytes(Path.ChangeExtension(jsonPath, ".bin"));
-            f.Key = j.key;
             f.Species = j.species;
             f.Style = j.style;
             f.Seed = j.seed;

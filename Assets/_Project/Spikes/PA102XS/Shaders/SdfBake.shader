@@ -25,6 +25,14 @@ Shader "Hidden/PocketArbor/Spike/SdfBake"
         TEXTURE2D(_SkBakePos);
         TEXTURE2D(_SkBakeNrm);
         TEXTURE2D(_SkBakeSurf);
+        // Masked re-bake (cut, C1): mask 2 = joint zone (full), 1 = light only, 0 = copy the previous outputs.
+        TEXTURE2D(_SkBakeMask);
+        TEXTURE2D(_SkPrevSnap);
+        TEXTURE2D(_SkPrevLight);
+        TEXTURE2D(_SkPrevMat);
+        float _SkMasked;
+
+        int skMask(int2 c) { return _SkMasked > 0.5 ? (int)(LOAD_TEXTURE2D(_SkBakeMask, c).r * 255. + .5) : 2; }
 
         struct FsOut { float4 pos : SV_POSITION; };
 
@@ -68,12 +76,20 @@ Shader "Hidden/PocketArbor/Spike/SdfBake"
                 int2 c = int2(i.pos.xy);
                 float4 P = LOAD_TEXTURE2D(_SkBakePos, c);
                 float4 N = LOAD_TEXTURE2D(_SkBakeNrm, c);
-                if (N.w < -0.5) return float4(P.xyz, 0.);
+                if (N.w < -0.5 || skMask(c) < 2) return float4(P.xyz, 0.);
                 float3 p = P.xyz, n = normalize(N.xyz);
                 float tmax = P.w;
-                if (N.w > 1.5 || tmax <= 0.) return float4(p, 0.);
+                if (N.w > 1.5) return float4(p, 0.);
                 // Soil vertices inside / at the pot wall stay put: otherwise they climb the slanted cavity wall ("teeth").
                 if (N.w > 0.5 && skPShape(p, skPotB(p) - 8.) > -1.) return float4(p, 0.);
+                if (tmax <= 0.)
+                {
+                    // "Free" vertex (no other part within its smin radius, CPU-classified): only a short Newton refine
+                    // onto the exact SDF surface (tube tessellation/taper error), no march, no projection.
+                    float tf = 0.;
+                    [unroll] for (int kf = 0; kf < 2; kf++) tf = clamp(tf - skMapD(p + n * tf, false), -1.5, 1.5);
+                    return float4(p + n * tf, tf);
+                }
                 float t = 0.;
                 float f = skMapD(p, false);
                 if (f > 0.)
@@ -114,6 +130,7 @@ Shader "Hidden/PocketArbor/Spike/SdfBake"
                 int2 c = int2(i.pos.xy);
                 float4 N = LOAD_TEXTURE2D(_SkBakeNrm, c);
                 if (N.w < -0.5) return 0;
+                if (skMask(c) < 2) return LOAD_TEXTURE2D(_SkPrevSnap, c);
                 if (N.w > 1.5) return float4(normalize(N.xyz), 0.); // pot: Surface Nets vertices are on the surface
                 float4 S = LOAD_TEXTURE2D(_SkBakeSurf, c);
                 bool buried = S.w < -9999.;
@@ -134,8 +151,20 @@ Shader "Hidden/PocketArbor/Spike/SdfBake"
                 int2 c = int2(i.pos.xy);
                 float4 N = LOAD_TEXTURE2D(_SkBakeNrm, c);
                 if (N.w < -0.5) return float4(1, 1, 1, 0);
-                float3 q = LOAD_TEXTURE2D(_SkBakeSurf, c).xyz;
-                float3 n = normalize(LOAD_TEXTURE2D(_SkBakeSnap, c).xyz);
+                int mk = skMask(c);
+                if (mk == 0) return LOAD_TEXTURE2D(_SkPrevLight, c);
+                float4 S = LOAD_TEXTURE2D(_SkBakeSnap, c);
+                float3 n = normalize(S.xyz);
+                float3 q;
+                if (mk == 2) q = LOAD_TEXTURE2D(_SkBakeSurf, c).xyz;
+                else
+                {
+                    // Light-only vertex: its surface point is unchanged — rebuild it from the snap result.
+                    // Buried vertices are hidden inside other parts: keep their previous light (no projection here).
+                    if (dot(S.xyz, S.xyz) > 2.25) return LOAD_TEXTURE2D(_SkPrevLight, c);
+                    float4 P = LOAD_TEXTURE2D(_SkBakePos, c);
+                    q = P.xyz + normalize(N.xyz) * S.w;
+                }
                 float3 L = _SkL.xyz;
                 float sh = skShd(q + n * .9 + L * .4, L);
                 float ft = skFolT(q + n * .5, L);
@@ -157,6 +186,7 @@ Shader "Hidden/PocketArbor/Spike/SdfBake"
                 int2 c = int2(i.pos.xy);
                 float4 N = LOAD_TEXTURE2D(_SkBakeNrm, c);
                 if (N.w < -0.5) return 0;
+                if (skMask(c) < 2) return LOAD_TEXTURE2D(_SkPrevMat, c);
                 float3 q = LOAD_TEXTURE2D(_SkBakeSurf, c).xyz;
                 float3 m = skMap(q, false);
                 float tr = max(1. - smoothstep(.5, 3., skTrunkD(q)), 1. - smoothstep(0., .9 * _SkRb, q.y));

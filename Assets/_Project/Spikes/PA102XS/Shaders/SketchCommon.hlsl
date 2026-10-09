@@ -84,6 +84,94 @@ float3 skPotC(float3 p)
     return c;
 }
 
+// ---------------------------------------------------------------- C6: LowEnd bark (SK_BARK_LOW)
+// The full bark builds the relief normal from 4 skBarkH calls (forward differences, step .35): for Kuromatsu that is
+// 4 Voronoi (27 cells each) + 1 more for the colour. The LowEnd variant evaluates every noise term ONCE with its
+// analytic gradient; Kuromatsu's colour and relief share one Voronoi. Optional LOD for thin branches: where the trunk
+// weight lerp(.25, 1, tr) = mat / age is below _SkBarkLodMat the plate pattern is replaced by its mean (no Voronoi),
+// faded in over [thr, 1.5 thr]. 0 = off (default).
+float _SkBarkLodMat;
+
+// skVn with its analytic gradient (identical value).
+float skVnD(float3 p, out float3 d)
+{
+    float3 i = floor(p), f = frac(p);
+    float3 u = f * f * (3. - 2. * f), du = 6. * f * (1. - f);
+    float a = skH13(i), b = skH13(i + float3(1, 0, 0)), c = skH13(i + float3(0, 1, 0)), e = skH13(i + float3(1, 1, 0));
+    float a1 = skH13(i + float3(0, 0, 1)), b1 = skH13(i + float3(1, 0, 1)), c1 = skH13(i + float3(0, 1, 1)), e1 = skH13(i + float3(1, 1, 1));
+    float k1 = b - a, k2 = c - a, k3 = a1 - a, k4 = a - b - c + e, k5 = a - c - a1 + c1, k6 = a - b - a1 + b1;
+    float k7 = -a + b + c - e + a1 - b1 - c1 + e1;
+    d = du * float3(k1 + k4 * u.y + k6 * u.z + k7 * u.y * u.z,
+                    k2 + k5 * u.z + k4 * u.x + k7 * u.z * u.x,
+                    k3 + k6 * u.x + k5 * u.y + k7 * u.x * u.y);
+    return a + k1 * u.x + k2 * u.y + k3 * u.z + k4 * u.x * u.y + k5 * u.y * u.z + k6 * u.z * u.x + k7 * u.x * u.y * u.z;
+}
+
+// skVor (F2 - F1) with its analytic gradient from the same 27-cell search: d|r|/dp = -r/|r|, r = feature - p.
+float skVorG(float3 p, out float3 g)
+{
+    float3 i = floor(p), f = frac(p);
+    float d1 = 8., d2 = 8.;
+    float3 r1 = 0, r2 = 0;
+    [unroll] for (int z = -1; z <= 1; z++)
+    [unroll] for (int y = -1; y <= 1; y++)
+    [unroll] for (int x = -1; x <= 1; x++)
+    {
+        float3 gg = float3(x, y, z), r = gg + skH33(i + gg) - f;
+        float d = dot(r, r);
+        if (d < d1) { d2 = d1; r2 = r1; d1 = d; r1 = r; }
+        else if (d < d2) { d2 = d; r2 = r; }
+    }
+    float s1 = sqrt(d1), s2 = sqrt(d2);
+    g = r1 / max(s1, 1e-4) - r2 / max(s2, 1e-4);
+    return s2 - s1;
+}
+
+// Bark colour (= skBarkC) and the gradient of skBarkH (sketch space) for the relief normal.
+float3 skBarkLow(float3 p, float mat, out float3 gr)
+{
+    if (_SkSpB > 1.5)
+    {
+        const float3 kv = float3(.09, .034, .09);
+        float e = .35;
+        float3 ge = 0;
+        float thr = _SkBarkLodMat * _SkAge;
+        [branch] if (mat >= thr)
+        {
+            e = skVorG(p * kv, ge);
+            ge *= kv;
+            float w = thr > 0. ? saturate((mat - thr) / (.5 * thr)) : 1.;
+            e = lerp(.35, e, w);
+            ge *= w;
+        }
+        float3 d4, d1;
+        float v4 = skVnD(p * .4, d4);
+        skVnD(p * float3(.3, .1, .3), d1);
+        float t = saturate(e * 5.), ss = t * t * (3. - 2. * t), dss = 30. * t * (1. - t);
+        float md = .8 + .2 * v4;
+        gr = (1. - mat) * .3 * float3(.3, .1, .3) * d1 + mat * (dss * md * ge + ss * .08 * d4);
+        float3 pl = float3(.068, .064, .06) * (.7 + .55 * skVn(p * .25)), fi = float3(.05, .02, .013), old = lerp(fi, pl, smoothstep(.02, .16, e));
+        return lerp(float3(.07, .058, .044), old, mat);
+    }
+    if (_SkSpB > 0.5)
+    {
+        float3 d1, d2;
+        float v1 = skVnD(p * float3(.1, 1., .1), d1);
+        skVnD(p * .25, d2);
+        float t = saturate((v1 - .8) / .17), dss = 6. * t * (1. - t) / .17;
+        gr = -.35 * mat * dss * float3(.1, 1., .1) * d1 + .02 * d2;
+        float3 b = float3(.105, .043, .028) * (.85 + .3 * skVn(p * float3(.2, .6, .2)));
+        b = lerp(b, float3(.19, .16, .12), .8 * mat * smoothstep(.74, .8, skVn(p * float3(.14, 1.3, .14) + 3.)));
+        b *= 1. - .45 * mat * smoothstep(.93, .98, skVn(p * float3(.05, .8, .05) + 7.));
+        return lerp(float3(.1, .05, .035), b, mat);
+    }
+    float3 da, db;
+    skVnD(p * float3(.6, .06, .6), da);
+    skVnD(p * float3(1.6, .15, 1.6), db);
+    gr = .15 * float3(.6, .06, .6) * da + .1 * float3(1.6, .15, 1.6) * db;
+    return skBarkC(p, mat);
+}
+
 // FS lighting with baked per-vertex terms bk = (shd, folT, ao, folIn). Returns colour before tonemap.
 float3 skShade(float3 base, float3 n, float4 bk, out float sh)
 {

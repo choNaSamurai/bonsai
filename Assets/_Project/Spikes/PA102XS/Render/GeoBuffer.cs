@@ -16,6 +16,8 @@ namespace PocketArbor.Spike.Render
         public Vector3[] Uv;
         public float[] TMax;
         public float[] Kind;
+        /// <summary>Relative bake cost hint per vertex (set by WoodMeshBuilder.ClassifySnap; 1 by default).</summary>
+        public float[] Cost;
         public int[] Idx;
         public int VCount, ICount;
 
@@ -26,6 +28,7 @@ namespace PocketArbor.Spike.Render
             Uv = new Vector3[vcap];
             TMax = new float[vcap];
             Kind = new float[vcap];
+            Cost = new float[vcap];
             Idx = new int[icap];
         }
 
@@ -44,6 +47,7 @@ namespace PocketArbor.Spike.Render
             Nrm[VCount] = n;
             TMax[VCount] = tmax;
             Kind[VCount] = kind;
+            Cost[VCount] = 1f;
             return VCount++;
         }
 
@@ -108,6 +112,7 @@ namespace PocketArbor.Spike.Render
             Array.Copy(o.Uv, Uv, o.VCount);
             Array.Copy(o.TMax, TMax, o.VCount);
             Array.Copy(o.Kind, Kind, o.VCount);
+            Array.Copy(o.Cost, Cost, o.VCount);
             Array.Copy(o.Idx, Idx, o.ICount);
             VCount = o.VCount;
             ICount = o.ICount;
@@ -121,6 +126,7 @@ namespace PocketArbor.Spike.Render
             Array.Resize(ref Uv, n);
             Array.Resize(ref TMax, n);
             Array.Resize(ref Kind, n);
+            Array.Resize(ref Cost, n);
         }
     }
 }

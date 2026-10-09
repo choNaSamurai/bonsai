@@ -1,5 +1,6 @@
-// PA-102X-S spike: procedural pot (Surface Nets mesh of potD). Per-pixel normal from the analytic potD gradient,
-// per-vertex baked shadow/AO/canopy shadow, the sketch's potC glaze and highlights.
+// PA-102X-S spike: procedural pot. Per-vertex baked shadow/AO/canopy shadow, the sketch's potC glaze and highlights.
+// Normal: C6 parametric pot (mesh exactly on potD = 0, analytic normals, hard edges) -> interpolated mesh normal
+// (_SkPotMeshNrm = 1, set per renderer); Surface Nets pot -> per-pixel analytic potD gradient (4 potD evaluations).
 Shader "PocketArbor/Spike/Pot"
 {
     Properties
@@ -21,8 +22,10 @@ Shader "PocketArbor/Spike/Pot"
             #include "TreeSdf.hlsl"
             #include "SketchBakeFetch.hlsl"
 
+            float _SkPotMeshNrm;
+
             struct A { float3 pos : POSITION; float3 nrm : NORMAL; float3 texel : TEXCOORD0; };
-            struct V { float4 cs : SV_POSITION; float3 ps : TEXCOORD0; float4 lt : TEXCOORD1; };
+            struct V { float4 cs : SV_POSITION; float3 ps : TEXCOORD0; float4 lt : TEXCOORD1; float3 n : TEXCOORD2; };
 
             V vert(A v)
             {
@@ -31,13 +34,16 @@ Shader "PocketArbor/Spike/Pot"
                 o.cs = TransformObjectToHClip(v.pos);
                 o.ps = v.pos;
                 o.lt = b.light;
+                o.n = b.nrm;
                 return o;
             }
 
             float4 frag(V i) : SV_Target
             {
                 float3 p = i.ps;
-                float3 n = skPotNrm(p);
+                float3 n;
+                [branch] if (_SkPotMeshNrm > 0.5) n = normalize(i.n);
+                else n = skPotNrm(p);
                 float3 base = skPotC(p);
                 float sh;
                 float3 col = skShade(base, n, i.lt, sh);

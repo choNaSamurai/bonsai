@@ -44,6 +44,16 @@ namespace PocketArbor.Spike.Render
 
         public int Build(SketchFrame f, Mesh mesh, bool frontToBack)
         {
+            Fill(f, frontToBack);
+            Apply(mesh);
+            return Count;
+        }
+
+        private Vector3 _bmin, _bmax;
+
+        /// <summary>Fills the vertex/index arrays (and the front-to-back order). Worker-thread safe (no Unity API).</summary>
+        public void Fill(SketchFrame f, bool frontToBack)
+        {
             int n = Mathf.Min(f.Nl, SketchConst.MAXLEAF);
             Ensure(n);
             float[] L = f.Leaf;
@@ -80,7 +90,15 @@ namespace PocketArbor.Spike.Render
                 mn = Vector3.Min(mn, p);
                 mx = Vector3.Max(mx, p);
             }
+            _bmin = mn;
+            _bmax = mx;
+            Count = n;
+        }
 
+        /// <summary>Uploads the filled arrays into the mesh (main thread).</summary>
+        public void Apply(Mesh mesh)
+        {
+            int n = Count;
             mesh.Clear();
             mesh.indexFormat = n * 4 > 65000 ? IndexFormat.UInt32 : IndexFormat.UInt16;
             int vc = n * 4;
@@ -92,11 +110,9 @@ namespace PocketArbor.Spike.Render
             mesh.SetUVs(2, _uv2, 0, vc);
             mesh.SetIndices(_idx, 0, n * 6, MeshTopology.Triangles, 0, false);
             Bounds b = new Bounds();
-            if (n > 0) b.SetMinMax(mn, mx);
+            if (n > 0) b.SetMinMax(_bmin, _bmax);
             b.Expand(40f);
             mesh.bounds = b;
-            Count = n;
-            return n;
         }
 
         private void Ensure(int n)

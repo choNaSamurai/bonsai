@@ -1,6 +1,7 @@
 // PA-102X-S spike: port of JS scene(t), genLeaves(), genExtras(), padHit() and helpers (sketch_v11 lines 86-189).
 // Everything the sketch writes to a Float32Array is stored as float here at the same index and read back as float;
 // intermediate maths is double, in the same evaluation order as JS.
+// C5: no managed allocations after warm-up — all scratch state lives in a SceneWork cached on the SketchScene.
 using System;
 using System.Collections.Generic;
 
@@ -15,8 +16,14 @@ namespace PocketArbor.Spike.TreeGen
 
         private static readonly D3 UP = new D3(0, 1, 0);
 
+        // Site parameters along the splines (JS inline array literals, hoisted to avoid per-call allocations).
+        private static readonly double[] UsPrimary = { 0.55, 0.7, 0.85, 1 }, UsPrimaryTips = { 0.7, 0.85, 1 };
+        private static readonly double[] UsSecondary = { 0.45, 0.65, 0.85, 1 }, UsSecondaryTips = { 0.5, 0.7, 0.85, 1 };
+        private static readonly double[] UsTertiary = { 0.35, 0.55, 0.75, 0.9, 1 }, UsTertiaryTips = { 0.5, 0.75, 1 };
+        private static readonly double[] UsSec4 = { 0.3, 0.5, 0.68, 0.84 }, UsSec3 = { 0.42, 0.64, 0.84 };
+
         /// <summary>Leaf/branch site (JS site() object).</summary>
-        private struct Site
+        internal struct Site
         {
             public D3 P, D;
             public double Sc;
@@ -25,8 +32,12 @@ namespace PocketArbor.Spike.TreeGen
             public int Pad;
         }
 
-        /// <summary>Mutable state of one scene() call (JS globals nc, np, SITES, PADS, CPS).</summary>
-        private sealed class Ctx
+        /// <summary>
+        /// Mutable state of scene() (JS globals nc, np, SITES, PADS, CPS) plus spline scratch buffers.
+        /// Allocated once per <see cref="SketchScene"/> (field SketchScene.Work) and reused by every Scene() call.
+        /// Capacities are the sketch maxima (≤ 8 branches × 60 sites + 6 apex × 3 + 5 seedling = 503 sites).
+        /// </summary>
+        internal sealed class Ctx
         {
             public SketchPlan M;
             public SpeciesDef Sp;
@@ -36,10 +47,18 @@ namespace PocketArbor.Spike.TreeGen
             public int Nc, Np;
             public int Seed;
             public D3 LL;
-            public readonly List<Site> Sites = new List<Site>(1024);
+            public readonly List<Site> Sites = new List<Site>(512);
             public readonly List<Site> Bs = new List<Site>(64);
             public readonly List<Site> As = new List<Site>(32);
             public Pad[] Pads;
+
+            // spline scratch: primary control points (6) -> pts (9); twig control (4) -> sp / tq (5); bspl extension (≤ 8)
+            public readonly D4[] C6 = new D4[6];
+            public readonly D4[] Ctl = new D4[4];
+            public readonly D4[] Ext = new D4[8];
+            public readonly D4[] Pts = new D4[9];
+            public readonly D4[] Sp5 = new D4[5];
+            public readonly D4[] Tq5 = new D4[5];
         }
 
         /// <summary>
@@ -54,6 +73,7 @@ namespace PocketArbor.Spike.TreeGen
             t = SketchMath.Cl(t, 0, 1);
             SpeciesDef sp = SketchSpecies.ForStyle(speciesKey, plan.Style);
             SketchScene s = reuse ?? new SketchScene();
+            Ctx c = s.Work ?? (s.Work = new Ctx());
             s.SpeciesKey = speciesKey;
             s.Style = plan.Style;
             s.Seed = plan.Seed;
@@ -62,11 +82,18 @@ namespace PocketArbor.Spike.TreeGen
             s.Pot = sp.Pot;
             s.LightDir = lightDir;
 
-            var c = new Ctx
-            {
-                M = plan, Sp = sp, S = s, Dat = s.Dat, Cb = s.Cb, Gm = s.Gm, Pe = s.Pe, Leaf = s.Leaf, XLeaf = s.XLeaf,
-                Pads = s.Pads, Seed = plan.Seed, LL = lightDir
-            };
+            c.M = plan;
+            c.Sp = sp;
+            c.S = s;
+            c.Dat = s.Dat;
+            c.Cb = s.Cb;
+            c.Gm = s.Gm;
+            c.Pe = s.Pe;
+            c.Leaf = s.Leaf;
+            c.XLeaf = s.XLeaf;
+            c.Pads = s.Pads;
+            c.Seed = plan.Seed;
+            c.LL = lightDir;
             RunScene(c, t);
             return s;
         }
@@ -115,16 +142,16 @@ namespace PocketArbor.Spike.TreeGen
             Set4(dat, oi * 4, cx, cy, cz, rad);
         }
 
-        /// <summary>JS bspl(C, nOut): quadratic B-spline with clamped ends.</summary>
-        private static D4[] Bspl(D4[] C, int nOut)
+        /// <summary>
+        /// JS bspl(C, nOut): quadratic B-spline with clamped ends. Writes nOut points into <paramref name="output"/>;
+        /// <paramref name="E"/> is scratch of length ≥ cl + 2.
+        /// </summary>
+        private static void Bspl(D4[] C, int cl, int nOut, D4[] E, D4[] output)
         {
-            int cl = C.Length;
-            var E = new D4[cl + 2];
             E[0] = C[0];
             for (int i = 0; i < cl; i++) E[i + 1] = C[i];
             E[cl + 1] = C[cl - 1];
-            int np = E.Length - 2;
-            var output = new D4[nOut];
+            int np = cl;
             for (int k = 0; k < nOut; k++)
             {
                 double v = (double)(k * np) / (nOut - 1);
@@ -135,8 +162,6 @@ namespace PocketArbor.Spike.TreeGen
                 output[k] = new D4(w0 * a.X + w1 * b.X + w2 * cc.X, w0 * a.Y + w1 * b.Y + w2 * cc.Y,
                     w0 * a.Z + w1 * b.Z + w2 * cc.Z, w0 * a.W + w1 * b.W + w2 * cc.W);
             }
-
-            return output;
         }
 
         /// <summary>JS cbR(c): chunk radius without the child-count thousands.</summary>
@@ -280,18 +305,25 @@ namespace PocketArbor.Spike.TreeGen
             return new D3(v.X / l, v.Y / l, v.Z / l);
         }
 
-        /// <summary>The common 4-point twig spline of secondary / tertiary / apex-fork branches.</summary>
-        private static D4[] Twig(D4 a0, D3 dir, double len, double r, double k1, double r1, double k2, double up2,
-            double r2, double up3, double tipMin, double tipK)
+        /// <summary>The common 4-point twig spline of secondary / tertiary / apex-fork branches -> 5 points in <paramref name="output"/>.</summary>
+        private static D4[] Twig(Ctx c, D4 a0, D3 dir, double len, double r, double k1, double r1, double k2, double up2,
+            double r2, double up3, double tipMin, double tipK, D4[] output)
         {
-            var S = new[]
-            {
-                new D4(a0.X, a0.Y, a0.Z, r),
-                new D4(SketchMath.Add(a0, dir, len * k1), r * r1),
-                new D4(SketchMath.Add(SketchMath.Add(a0, dir, len * k2), UP, len * up2), r * r2),
-                new D4(SketchMath.Add(SketchMath.Add(a0, dir, len), UP, len * up3), Math.Max(tipMin, r * tipK))
-            };
-            return Bspl(S, 5);
+            D4[] S = c.Ctl;
+            S[0] = new D4(a0.X, a0.Y, a0.Z, r);
+            S[1] = new D4(SketchMath.Add(a0, dir, len * k1), r * r1);
+            S[2] = new D4(SketchMath.Add(SketchMath.Add(a0, dir, len * k2), UP, len * up2), r * r2);
+            S[3] = new D4(SketchMath.Add(SketchMath.Add(a0, dir, len), UP, len * up3), Math.Max(tipMin, r * tipK));
+            Bspl(S, 4, 5, c.Ext, output);
+            return output;
+        }
+
+        /// <summary>JS tR(s) inside scene(): trunk radius at arc length s.</summary>
+        private static double TrunkR(SketchPlan M, double s, double L, double R, double rt, double t)
+        {
+            double u = SketchMath.Cl(s / L, 0, 1);
+            return (rt + (R - rt) * Math.Pow(1 - u, 1.2) + R * 0.3 * Math.Exp(-Math.Max(0, s) / (1.3 * R)))
+                   * (1 + 0.06 * t * M.Nl[s / 30]);
         }
 
         private static void RunScene(Ctx c, double t)
@@ -301,18 +333,11 @@ namespace PocketArbor.Spike.TreeGen
             float[] DAT = c.Dat;
             double L = SketchMath.Lt(t), R = M.Rt(t), rt = 0.5 + 0.06 * R, s0 = -0.6 * R;
 
-            double TR(double s)
-            {
-                double u = SketchMath.Cl(s / L, 0, 1);
-                return (rt + (R - rt) * Math.Pow(1 - u, 1.2) + R * 0.3 * Math.Exp(-Math.Max(0, s) / (1.3 * R)))
-                       * (1 + 0.06 * t * M.Nl[s / 30]);
-            }
-
             // trunk
             for (int k = 0; k <= NT; k++)
             {
                 double s = s0 + (L - s0) * k / NT;
-                Set4(DAT, k * 4, Ax(M, s), TR(s));
+                Set4(DAT, k * 4, Ax(M, s), TrunkR(M, s, L, R, rt, t));
             }
 
             for (int ch = 0; ch < NTC; ch++) Bound(DAT, ch * 4, 5, OB + ch);
@@ -368,20 +393,20 @@ namespace PocketArbor.Spike.TreeGen
             c.Np = 0;
             c.Sites.Clear();
             int ng = 0, nb = 0;
-            double[] usPrimary = SPc.Tips ? new[] { 0.7, 0.85, 1 } : new[] { 0.55, 0.7, 0.85, 1 };
-            double[] usSecondary = SPc.Tips ? new[] { 0.5, 0.7, 0.85, 1 } : new[] { 0.45, 0.65, 0.85, 1 };
-            double[] usTertiary = SPc.Tips ? new[] { 0.5, 0.75, 1 } : new[] { 0.35, 0.55, 0.75, 0.9, 1 };
-            double[] us4 = { 0.3, 0.5, 0.68, 0.84 }, us3 = { 0.42, 0.64, 0.84 };
+            double[] usPrimary = SPc.Tips ? UsPrimaryTips : UsPrimary;
+            double[] usSecondary = SPc.Tips ? UsSecondaryTips : UsSecondary;
+            double[] usTertiary = SPc.Tips ? UsTertiaryTips : UsTertiary;
+            double[] us4 = UsSec4, us3 = UsSec3;
             for (int bi = 0; bi < M.Branches.Length; bi++)
             {
                 SketchBranch b = M.Branches[bi];
                 double g = SketchMath.Sm((t - b.Ts) / 0.3);
                 if (g <= 0.01 || b.S > L - 6) continue;
                 D3 P0 = Ax(M, b.S);
-                double rb0 = Math.Max(0.6, b.Thk * TR(b.S) * (0.35 + 0.65 * g)), Lb = b.Len * g;
+                double rb0 = Math.Max(0.6, b.Thk * TrunkR(M, b.S, L, R, rt, t) * (0.35 + 0.65 * g)), Lb = b.Len * g;
                 var h = new D3(Math.Sin(b.Az), 0, Math.Cos(b.Az));
                 var pp = new D3(Math.Cos(b.Az), 0, -Math.Sin(b.Az));
-                var C = new D4[6];
+                D4[] C = c.C6;
                 for (int k = 0; k <= 5; k++)
                 {
                     double u = k / 5.0;
@@ -391,7 +416,8 @@ namespace PocketArbor.Spike.TreeGen
                     C[k] = new D4(p, Math.Max(0.5, rb0 * Math.Pow(1 - 0.7 * u, 1.1)));
                 }
 
-                D4[] pts = Bspl(C, 9);
+                D4[] pts = c.Pts;
+                Bspl(C, 6, 9, c.Ext, pts);
                 int c0 = c.Nc;
                 PutChunk(c, pts, 0, true);
                 PutChunk(c, pts, 4, false);
@@ -416,7 +442,7 @@ namespace PocketArbor.Spike.TreeGen
                         var dn = new D3(dv.X / dl, dv.Y / dl, dv.Z / dl);
                         double Ls = 0.6 * Lb * (1 - 0.45 * us) * g2, rs = Math.Max(0.45, 0.48 * A.W);
                         rsAvg = rs;
-                        D4[] sp = Twig(A, dn, Ls, rs, 0.35, 0.75, 0.7, 0.05, 0.5, 0.12, 0.4, 0.3);
+                        D4[] sp = Twig(c, A, dn, Ls, rs, 0.35, 0.75, 0.7, 0.05, 0.5, 0.12, 0.4, 0.3, c.Sp5);
                         int cs = PutChunk(c, sp, 0, true);
                         int nt = 0;
                         for (int ui = 0; ui < usSecondary.Length; ui++) bs.Add(MakeSite(sp, usSecondary[ui], g2, bi, j, 9, ui));
@@ -435,7 +461,7 @@ namespace PocketArbor.Spike.TreeGen
                                 double dl3 = SketchMath.Hypot(d3.X, d3.Y, d3.Z);
                                 var dd3 = new D3(d3.X / dl3, d3.Y / dl3, d3.Z / dl3);
                                 double Lt3 = 0.5 * Ls * (1 - 0.3 * ut) * g3, r3 = Math.Max(0.35, 0.6 * T0.W);
-                                D4[] tq = Twig(T0, dd3, Lt3, r3, 0.4, 0.75, 0.75, 0.05, 0.5, 0.12, 0.32, 0.35);
+                                D4[] tq = Twig(c, T0, dd3, Lt3, r3, 0.4, 0.75, 0.75, 0.05, 0.5, 0.12, 0.32, 0.35, c.Tq5);
                                 PutChunk(c, tq, 0, true);
                                 nt++;
                                 for (int ui = 0; ui < usTertiary.Length; ui++) bs.Add(MakeSite(tq, usTertiary[ui], g3, bi, j, q, ui));
@@ -487,10 +513,10 @@ namespace PocketArbor.Spike.TreeGen
                     SketchApex a = M.Apex[ai];
                     double s = a.F * L;
                     D3 P0 = Ax(M, s);
-                    double rb = Math.Max(0.5, (a.El > 0.8 ? 0.6 : 0.36) * TR(s)), ln = a.Len * LMAX * ga;
+                    double rb = Math.Max(0.5, (a.El > 0.8 ? 0.6 : 0.36) * TrunkR(M, s, L, R, rt, t)), ln = a.Len * LMAX * ga;
                     var dv = new D3(Math.Sin(a.Az) * Math.Cos(a.El), Math.Sin(a.El), Math.Cos(a.Az) * Math.Cos(a.El));
                     rbA = rb;
-                    D4[] sp = Twig(new D4(P0, rb), dv, ln, rb, 0.35, 0.72, 0.7, 0.08, 0.48, 0.16, 0.4, 0.3);
+                    D4[] sp = Twig(c, new D4(P0, rb), dv, ln, rb, 0.35, 0.72, 0.7, 0.08, 0.48, 0.16, 0.4, 0.3, c.Sp5);
                     int cs = PutChunk(c, sp, 0, true);
                     asl.Add(MakeSite(sp, 1, ga, 99, ai, 9, 0));
                     asl.Add(MakeSite(sp, 0.6, ga, 99, ai, 9, 1));
@@ -505,7 +531,7 @@ namespace PocketArbor.Spike.TreeGen
                         double l3 = SketchMath.Hypot(d3.X, d3.Y, d3.Z);
                         var dd3 = new D3(d3.X / l3, d3.Y / l3, d3.Z / l3);
                         double Lt3 = 0.45 * ln * SketchMath.Sm((ga - 0.4) / 0.5), r3 = Math.Max(0.35, 0.6 * T0.W);
-                        D4[] fq = Twig(T0, dd3, Lt3, r3, 0.4, 0.75, 0.75, 0.05, 0.5, 0.12, 0.32, 0.35);
+                        D4[] fq = Twig(c, T0, dd3, Lt3, r3, 0.4, 0.75, 0.75, 0.05, 0.5, 0.12, 0.32, 0.35, c.Tq5);
                         PutChunk(c, fq, 0, true);
                         SubBound(c, cs, 1);
                         asl.Add(MakeSite(fq, 1, ga, 99, ai, 1, 0));

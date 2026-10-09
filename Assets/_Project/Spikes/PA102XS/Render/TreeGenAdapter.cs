@@ -1,25 +1,34 @@
 using System;
-using System.Collections.Generic;
 using PocketArbor.Spike.TreeGen;
 
 namespace PocketArbor.Spike.Render
 {
     /// <summary>
     /// Bridges the C# generator port (TreeGen.SketchScene, GP) to the render frame. The array layout is the same
-    /// contract, so this is a plain copy of the live prefixes + counters. Plans are cached per (style, seed).
+    /// contract, so this is a plain copy of the live prefixes + counters. Allocation-free after warm-up (C5):
+    /// plans cached per (style, seed) without string keys, the same SketchScene is reused, no key strings.
     /// </summary>
     public static class TreeGenAdapter
     {
-        private static readonly Dictionary<string, SketchPlan> Plans = new Dictionary<string, SketchPlan>();
+        private const int MaxPlans = 16;
+        private static readonly string[] PlanStyle = new string[MaxPlans];
+        private static readonly int[] PlanSeed = new int[MaxPlans];
+        private static readonly SketchPlan[] Plans = new SketchPlan[MaxPlans];
+        private static int _planCount, _planNext;
         private static SketchScene _reuse;
 
         public static bool Generate(string species, string style, int seed, float t, SketchFrame into)
         {
-            string pk = style + "#" + seed;
-            if (!Plans.TryGetValue(pk, out SketchPlan plan))
+            SketchPlan plan = null;
+            for (int i = 0; i < _planCount; i++)
+                if (PlanSeed[i] == seed && string.Equals(PlanStyle[i], style, StringComparison.Ordinal)) { plan = Plans[i]; break; }
+            if (plan == null)
             {
                 plan = SketchGenerator.Build(style, seed);
-                Plans[pk] = plan;
+                int slot = _planCount < MaxPlans ? _planCount++ : (_planNext++ % MaxPlans);
+                PlanStyle[slot] = style;
+                PlanSeed[slot] = seed;
+                Plans[slot] = plan;
             }
             _reuse = SketchGenerator.Scene(plan, species, t, SketchLayout.DefaultLight, _reuse);
             Copy(_reuse, into);
@@ -28,7 +37,6 @@ namespace PocketArbor.Spike.Render
 
         public static void Copy(SketchScene s, SketchFrame f)
         {
-            f.Key = s.Key;
             f.Species = s.SpeciesKey;
             f.Style = s.Style;
             f.Seed = s.Seed;

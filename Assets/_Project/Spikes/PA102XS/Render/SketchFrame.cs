@@ -34,7 +34,8 @@ namespace PocketArbor.Spike.Render
     /// </summary>
     public sealed class SketchFrame
     {
-        public string Key = "";
+        /// <summary>Configuration key (allocates; for logs/tools, not per frame).</summary>
+        public string Key => MakeKey(Species, Style, Seed, T);
         public string Species = "momiji";
         public string Style = "moyogi";
         public int Seed;
@@ -62,7 +63,7 @@ namespace PocketArbor.Spike.Render
 
         public void CopyFrom(SketchFrame o)
         {
-            Key = o.Key; Species = o.Species; Style = o.Style; Seed = o.Seed; T = o.T; L = o.L; R = o.R;
+            Species = o.Species; Style = o.Style; Seed = o.Seed; T = o.T; L = o.L; R = o.R;
             Nr = o.Nr; Ng = o.Ng; Nb = o.Nb; Nl = o.Nl; Nx = o.Nx; Nc = o.Nc; Np = o.Np;
             System.Array.Copy(o.Dat, Dat, Dat.Length);
             System.Array.Copy(o.Cb, Cb, Cb.Length);
@@ -110,7 +111,22 @@ namespace PocketArbor.Spike.Render
 
         public string PotKey => PotShape + "_" + PotHw + "_" + PotHd + "_" + PotDep;
 
+        public bool SamePot(SpeciesLook o)
+        {
+            return o != null && o.PotShape == PotShape && o.PotHw == PotHw && o.PotHd == PotHd && o.PotDep == PotDep;
+        }
+
+        private static readonly SpeciesLook[] Cache = new SpeciesLook[6];
+
+        /// <summary>Cached per (species, bunjin pot) — allocation-free after the first call. Do not mutate.</summary>
         public static SpeciesLook For(string species, string style)
+        {
+            int id = species == "yamazakura" ? 1 : species == "kuromatsu" ? 2 : 0;
+            int slot = id * 2 + (style == "bunjin" ? 1 : 0);
+            return Cache[slot] ?? (Cache[slot] = Create(species, style));
+        }
+
+        private static SpeciesLook Create(string species, string style)
         {
             SpeciesLook s;
             switch (species)
