@@ -1,0 +1,148 @@
+{
+    "m_Name": "",
+    "serializedVersion": "2",
+    "m_Version": 0,
+    "m_DeviceRenderer": 11,
+    "m_RuntimePlatform": 11,
+    "m_QualityLevelName": "Default",
+    "m_VariantInfoMap": [
+        {
+            "first": {
+                "serializedVersion": "2",
+                "Hash": "26b08ddb48f16919e86ff23f15860091"
+            },
+            "second": {
+                "shaderName": "Hidden/PocketArbor/Spike/SdfBake",
+                "shaderAssetGUID": "426617d40d5444e67979ff71b4288a29",
+                "shaderAssetLocalIdentifierInFile": 4800000,
+                "keywordNames": "",
+                "subShaderIndex": 0,
+                "passIndex": 2,
+                "graphicsStateInfoSet": []
+            }
+        },
+        {
+            "first": {
+                "serializedVersion": "2",
+                "Hash": "6f9c96c9b99e2018e7a3e487f004a7f1"
+            },
+            "second": {
+                "shaderName": "PocketArbor/Spike/Leaves",
+                "shaderAssetGUID": "4170e4f5fcfbb447fba855dd8f3d8aeb",
+                "shaderAssetLocalIdentifierInFile": 4800000,
+                "keywordNames": "",
+                "subShaderIndex": 0,
+                "passIndex": 0,
+                "graphicsStateInfoSet": []
+            }
+        },
+        {
+            "first": {
+                "serializedVersion": "2",
+                "Hash": "7720de7bef1a2f7379b712a2825d6a06"
+            },
+            "second": {
+                "shaderName": "Hidden/Internal-GUITexture",
+                "shaderAssetGUID": "0860a397848c35f488bf42d3c36a3330",
+                "shaderAssetLocalIdentifierInFile": 4800000,
+                "keywordNames": "",
+                "subShaderIndex": 0,
+                "passIndex": 0,
+                "graphicsStateInfoSet": []
+            }
+        },
+        {
+            "first": {
+                "serializedVersion": "2",
+                "Hash": "e67c6b14ba4c89b96bc8f8fade979c73"
+            },
+            "second": {
+                "shaderName": "Hidden/PocketArbor/Spike/SdfBake",
+                "shaderAssetGUID": "426617d40d5444e67979ff71b4288a29",
+                "shaderAssetLocalIdentifierInFile": 4800000,
+                "keywordNames": "",
+                "subShaderIndex": 0,
+                "passIndex": 0,
+                "graphicsStateInfoSet": []
+            }
+        },
+        {
+            "first": {
+                "serializedVersion": "2",
+                "Hash": "02f144ef845b260319a00610f3003c61"
+            },
+            "second": {
+                "shaderName": "PocketArbor/Spike/Wood",
+                "shaderAssetGUID": "ad2fc496dd3ee44bf8b077a0347770ba",
+                "shaderAssetLocalIdentifierInFile": 4800000,
+                "keywordNames": "SK_BARK_LOW",
+                "subShaderIndex": 0,
+                "passIndex": 0,
+                "graphicsStateInfoSet": []
+            }
+        },
+        {
+            "first": {
+                "serializedVersion": "2",
+                "Hash": "5c59dffcee16b7ee55f5c970600abb46"
+            },
+            "second": {
+                "shaderName": "PocketArbor/Spike/Wood",
+                "shaderAssetGUID": "ad2fc496dd3ee44bf8b077a0347770ba",
+                "shaderAssetLocalIdentifierInFile": 4800000,
+                "keywordNames": "",
+                "subShaderIndex": 0,
+                "passIndex": 0,
+                "graphicsStateInfoSet": []
+            }
+        },
+        {
+            "first": {
+                "serializedVersion": "2",
+                "Hash": "a3bd68ca4d62d6793f07dd7edb403ba1"
+            },
+            "second": {
+                "shaderName": "PocketArbor/Spike/Pot",
+                "shaderAssetGUID": "7be5ec5f3e32d4ed88f3a5b5f89677d9",
+                "shaderAssetLocalIdentifierInFile": 4800000,
+                "keywordNames": "",
+                "subShaderIndex": 0,
+                "passIndex": 0,
+                "graphicsStateInfoSet": []
+            }
+        },
+        {
+            "first": {
+                "serializedVersion": "2",
+                "Hash": "c9559e1bdd4d811ea493ff4190259597"
+            },
+            "second": {
+                "shaderName": "Hidden/PocketArbor/Spike/SdfBake",
+                "shaderAssetGUID": "426617d40d5444e67979ff71b4288a29",
+                "shaderAssetLocalIdentifierInFile": 4800000,
+                "keywordNames": "",
+                "subShaderIndex": 0,
+                "passIndex": 3,
+                "graphicsStateInfoSet": []
+            }
+        },
+        {
+            "first": {
+                "serializedVersion": "2",
+                "Hash": "0ef3ca71e9f2872bdb878bce62b473e3"
+            },
+            "second": {
+                "shaderName": "Hidden/PocketArbor/Spike/SdfBake",
+                "shaderAssetGUID": "426617d40d5444e67979ff71b4288a29",
+                "shaderAssetLocalIdentifierInFile": 4800000,
+                "keywordNames": "",
+                "subShaderIndex": 0,
+                "passIndex": 1,
+                "graphicsStateInfoSet": []
+            }
+        }
+    ],
+    "m_VertexLayoutInfoMap": [],
+    "m_RenderPassInfoMap": [],
+    "m_RenderStateMap": []
+}

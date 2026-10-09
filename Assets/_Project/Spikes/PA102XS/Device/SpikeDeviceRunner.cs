@@ -27,7 +27,8 @@ namespace PocketArbor.Spike.Device
         public int rebuildFrames = 60;
         public int growthFrames = 120;
         public string scenario = "2c";
-        public GraphicsStateCollection pso;
+        public GraphicsStateCollection pso;      // traced on Vulkan
+        public GraphicsStateCollection psoGles;  // traced on OpenGLES3 (warm-up = shader compile on GLES)
         public bool tracePso;
 
         private const int MaxFrames = 8192;
@@ -66,6 +67,13 @@ namespace PocketArbor.Spike.Device
             Screen.sleepTimeout = SleepTimeout.NeverSleep;
             Application.targetFrameRate = 60;
             SketchTreeRenderer.ShaderLookup = FindShader;
+            string launch = LaunchScenario();
+            if (!string.IsNullOrEmpty(launch)) scenario = launch;
+            if (scenario == "interactive" || scenario == "selftest")
+            {
+                yield return StartInteractive(scenario == "selftest");
+                yield break;
+            }
             _dir = Path.Combine(Application.persistentDataPath, "pa102xs");
             if (Directory.Exists(_dir)) Directory.Delete(_dir, true);
             Directory.CreateDirectory(_dir);
@@ -93,6 +101,7 @@ namespace PocketArbor.Spike.Device
             Field("psoTrace", tracePso ? "true" : "false", true);
 
             // K9: PSO warm-up while the app "loads" (blocking here = loading screen).
+            if (SystemInfo.graphicsDeviceType == GraphicsDeviceType.OpenGLES3) pso = psoGles;
             if (pso != null && !tracePso)
             {
                 var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -110,6 +119,8 @@ namespace PocketArbor.Spike.Device
 
             if (scenario == "2a") yield return Scenario2a();
             else if (scenario == "c6") yield return ScenarioC6();
+            else if (scenario == "c7") yield return ScenarioC7();
+            else if (scenario == "k9") yield return ScenarioK9();
             else yield return Scenario2c();
 
             _json.Append("\n  ]\n}\n");
@@ -123,6 +134,47 @@ namespace PocketArbor.Spike.Device
             }
             File.WriteAllText(Path.Combine(_dir, "done.txt"), name);
             Log("PA102XS_DONE " + name);
+        }
+
+        /// <summary>Scenario from the launch intent (am start ... -e scenario 2c); null when launched from the icon.</summary>
+        private static string LaunchScenario()
+        {
+#if UNITY_ANDROID && !UNITY_EDITOR
+            try
+            {
+                using (var player = new AndroidJavaClass("com.unity3d.player.UnityPlayer"))
+                using (var activity = player.GetStatic<AndroidJavaObject>("currentActivity"))
+                using (var intent = activity.Call<AndroidJavaObject>("getIntent"))
+                {
+                    string s = intent.Call<string>("getStringExtra", "scenario");
+                    Log("launch scenario extra: " + (s ?? "(none)"));
+                    return s;
+                }
+            }
+            catch (Exception e)
+            {
+                Log("launch scenario extra unavailable: " + e.Message);
+            }
+#endif
+            return null;
+        }
+
+        /// <summary>Interactive mode (owner's manual testing): PSO warm-up as in K9, then the debug-menu controller.</summary>
+        private IEnumerator StartInteractive(bool selfTest)
+        {
+            Log("interactive " + SystemInfo.deviceModel + " " + SystemInfo.graphicsDeviceType + " " + SystemInfo.graphicsDeviceVersion + " selftest=" + selfTest);
+            if (SystemInfo.graphicsDeviceType == GraphicsDeviceType.OpenGLES3) pso = psoGles;
+            if (pso != null)
+            {
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                pso.WarmUp().Complete();
+                Log("PSO warm-up " + sw.Elapsed.TotalMilliseconds.ToString("0.0", Inv) + " ms, states " + pso.totalGraphicsStateCount);
+            }
+            yield return null;
+            var it = gameObject.AddComponent<SpikeInteractive>();
+            it.cam = cam;
+            it.selfTest = selfTest;
+            enabled = false; // the runner's Update (fixed wind) is not used in this mode
         }
 
         private Shader FindShader(string n)
@@ -403,6 +455,99 @@ namespace PocketArbor.Spike.Device
             }
             _tree.LowEndBark = false;
             Shader.SetGlobalFloat(IdBarkLod, 0f);
+        }
+
+        // ================================================================== scenario c7: full re-measure K1-K11 after C1-C6
+
+        private void SetBark(bool lowEnd)
+        {
+            _tree.LowEndBark = lowEnd;
+            Shader.SetGlobalFloat(IdBarkLod, lowEnd ? 0.4f : 0f);
+        }
+
+        private IEnumerator ScenarioC7()
+        {
+            SetBark(false);
+            yield return Measure("baseline_empty", Dev ? 3f : 10f, null);
+
+            // K9: first show of the app (async rebuild, full bark), then the first draw of the LowEnd bark variant.
+            yield return AsyncShow("k9_first_show_momiji_full", "momiji", 1f, 45);
+            AppendMemory("k8_memory_momiji");
+            ResetFrames();
+            SetBark(true);
+            for (int i = 0; i < 45; i++) { yield return null; Sample(); }
+            AppendFrames("k9_first_draw_bark_low", null);
+            yield return AsyncShow("k9_show_kuromatsu_low", "kuromatsu", 1f, 30);
+            AppendMemory("k8_memory_kuromatsu");
+            SetBark(false);
+            for (int i = 0; i < 10; i++) yield return null;
+
+            // K1, K2, K3, K8, K11: steady state with wind.
+            yield return Steady("momiji", "moyogi", 3, 1f);
+            yield return Steady("kuromatsu", "moyogi", 3, 1f);
+            SetBark(true);
+            yield return SteadyTagged("kuromatsu", "_low");
+            SetBark(false);
+            yield return Steady("yamazakura", "moyogi", 3, 1f);
+
+            // K4: three cuts per species on a freshly shown tree (spread between repeats).
+            for (int r = 0; r < 3; r++)
+            {
+                yield return AsyncShow("show_momiji_r" + r, "momiji", 1f, 10);
+                yield return CutScenario("momiji", sliceFrames);
+            }
+            for (int r = 0; r < 3; r++)
+            {
+                yield return AsyncShow("show_kuromatsu_r" + r, "kuromatsu", 1f, 10);
+                yield return CutScenario("kuromatsu", sliceFrames);
+            }
+
+            // K5: daily growth (worker + 120 bake frames).
+            yield return AsyncShow("show_momiji_t95", "momiji", 0.95f, 10);
+            _tree.ResetPeak();
+            yield return Growth("growth_momiji_95_100", "momiji", 1f);
+            AppendMemory("k8_memory_after_growth");
+            yield return AsyncShow("show_kuromatsu_t95", "kuromatsu", 0.95f, 10);
+            yield return Growth("growth_kuromatsu_95_100", "kuromatsu", 1f);
+
+            // K7: Chronicle scrubbing.
+            yield return Chronicle("momiji", Dev ? 5f : 10f);
+            yield return Chronicle("kuromatsu", Dev ? 5f : 10f);
+            yield return AsyncShow("show_end", "momiji", 1f, 10);
+        }
+
+        /// <summary>K9 only (run on a fresh install = cold driver/pipeline caches): first show, first LowEnd draw.</summary>
+        private IEnumerator ScenarioK9()
+        {
+            SetBark(false);
+            yield return Measure("baseline_empty", 3f, null);
+            yield return AsyncShow("k9_first_show_momiji_full", "momiji", 1f, 45);
+            ResetFrames();
+            SetBark(true);
+            for (int i = 0; i < 45; i++) { yield return null; Sample(); }
+            AppendFrames("k9_first_draw_bark_low", null);
+            yield return AsyncShow("k9_show_kuromatsu_low", "kuromatsu", 1f, 30);
+            SetBark(false);
+        }
+
+        /// <summary>Steady state of the currently configured bark mode with a tag suffix (tree shown synchronously).</summary>
+        private IEnumerator SteadyTagged(string sp, string suffix)
+        {
+            _windNow = 0f;
+            SketchTreeRenderer.Stats st = _tree.Show(Gen(sp, "moyogi", 3, 1f));
+            string tag = sp + "_moyogi_s3_t100" + suffix;
+            for (int i = 0; i < 10; i++) yield return null;
+            Screenshot("shot_" + tag);
+            string loop = GpuLoop(Dev ? 20 : 60);
+            for (int i = 0; i < 10; i++) yield return null;
+            _windNow = wind;
+            float warm = 0f;
+            while (warm < 3f) { warm += Time.unscaledDeltaTime; yield return null; }
+            yield return Measure("steady_" + tag, SteadySeconds, null);
+            BeginSection("steady_" + tag + "_build");
+            _json.AppendFormat(Inv, "\"woodTris\": {0}, \"leaves\": {1}, \"potTris\": {2}, \"bakeMs\": {3:0.0}, \"gpuBytes\": {4}, {5}}}",
+                st.WoodTris, st.Leaves, st.PotTris, st.BakeMs, _tree.GpuBytes(), loop);
+            _windNow = 0f;
         }
 
         // ================================================================== scenario 2a (full re-measure, C7)

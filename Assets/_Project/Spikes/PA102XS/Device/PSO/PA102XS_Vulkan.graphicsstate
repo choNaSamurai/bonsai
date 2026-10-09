@@ -168,6 +168,60 @@
         {
             "first": {
                 "serializedVersion": "2",
+                "Hash": "02f144ef845b260319a00610f3003c61"
+            },
+            "second": {
+                "shaderName": "PocketArbor/Spike/Wood",
+                "shaderAssetGUID": "ad2fc496dd3ee44bf8b077a0347770ba",
+                "shaderAssetLocalIdentifierInFile": 4800000,
+                "keywordNames": "SK_BARK_LOW",
+                "subShaderIndex": 0,
+                "passIndex": 0,
+                "graphicsStateInfoSet": [
+                    {
+                        "vertexLayout": 1740388784173454522,
+                        "renderPass": 7184180711028264880,
+                        "renderState": 15649462741326987297,
+                        "subPassIndex": 0,
+                        "topology": 0,
+                        "forceCullMode": -1,
+                        "shadingRateCombinerPrimitive": 0,
+                        "shadingRateCombinerFragment": 0,
+                        "baseShadingRate": 0,
+                        "depthBias": 0.0,
+                        "slopeDepthBias": 0.0,
+                        "userBackface": false,
+                        "appBackface": true,
+                        "wireframe": false,
+                        "invertProjectionMatrix": true,
+                        "unfilterableTextureBindings": 0,
+                        "nonfilteringSamplerBindings": 0
+                    },
+                    {
+                        "vertexLayout": 1740388784173454522,
+                        "renderPass": 8682276298774332510,
+                        "renderState": 15649462741326987297,
+                        "subPassIndex": 0,
+                        "topology": 0,
+                        "forceCullMode": -1,
+                        "shadingRateCombinerPrimitive": 0,
+                        "shadingRateCombinerFragment": 0,
+                        "baseShadingRate": 0,
+                        "depthBias": 0.0,
+                        "slopeDepthBias": 0.0,
+                        "userBackface": false,
+                        "appBackface": true,
+                        "wireframe": false,
+                        "invertProjectionMatrix": false,
+                        "unfilterableTextureBindings": 0,
+                        "nonfilteringSamplerBindings": 0
+                    }
+                ]
+            }
+        },
+        {
+            "first": {
+                "serializedVersion": "2",
                 "Hash": "5c59dffcee16b7ee55f5c970600abb46"
             },
             "second": {

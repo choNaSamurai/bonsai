@@ -115,20 +115,25 @@ namespace PocketArbor.Spike.Render
             mesh.bounds = b;
         }
 
+        /// <summary>Capacity in leaves: preallocated (Kuromatsu t = 1 ≈ 9.9k), then ×1.5 — no per-frame reallocation (K3/K7).</summary>
+        public const int DefaultCapacity = 12000;
+
         private void Ensure(int n)
         {
-            if (_key.Length < n) { _key = new float[n]; _order = new int[n]; }
-            int v = n * 4;
-            if (_pos.Length < v)
-            {
-                _pos = new Vector3[v];
-                _nrm = new Vector3[v];
-                _tan = new Vector4[v];
-                _uv0 = new Vector2[v];
-                _uv1 = new Vector2[v];
-                _uv2 = new Vector4[v];
-                _idx = new int[n * 6];
-            }
+            int cap = _key.Length;
+            if (cap >= n && _pos.Length >= n * 4) return;
+            cap = Math.Max(n, Math.Max(DefaultCapacity, cap + cap / 2));
+            cap = Math.Min(Math.Max(cap, n), SketchConst.MAXLEAF);
+            _key = new float[cap];
+            _order = new int[cap];
+            int v = cap * 4;
+            _pos = new Vector3[v];
+            _nrm = new Vector3[v];
+            _tan = new Vector4[v];
+            _uv0 = new Vector2[v];
+            _uv1 = new Vector2[v];
+            _uv2 = new Vector4[v];
+            _idx = new int[cap * 6];
         }
     }
 }

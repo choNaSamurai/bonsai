@@ -58,6 +58,43 @@ namespace PocketArbor.Spike.Editor
         public static void Smoke() { Execute(KeysFromArgs() ?? new[] { "momiji_moyogi_s3_t100" }, false, true, false, ArgValue("-spikeLod") == "budget"); }
         public static void DepthOnly() { Execute(new string[0], false, true, false, false); }
 
+        /// <summary>C7: managed allocations per Chronicle frame (generator vs renderer), momiji and kuromatsu t-sweep.</summary>
+        public static void AllocProbe()
+        {
+            ShaderUtil.allowAsyncCompilation = false;
+            var tree = new SketchTreeRenderer(null, HideFlags.HideAndDontSave);
+            var f = new SketchFrame();
+            try
+            {
+                foreach (string sp in new[] { "momiji", "kuromatsu", "yamazakura" })
+                {
+                    // warm-up sweep, then measured sweep
+                    for (int pass = 0; pass < 2; pass++)
+                    {
+                        long gen = 0, build = 0;
+                        int frames = 120;
+                        for (int i = 0; i <= frames; i++)
+                        {
+                            float t = i / (float)frames;
+                            // Heap growth without forcing a collection (GetAllocatedBytesForCurrentThread is 0 on Unity Mono).
+                            long a = GC.GetTotalMemory(false);
+                            TreeGenAdapter.Generate(sp, "moyogi", 3, t, f);
+                            long b = GC.GetTotalMemory(false);
+                            tree.ShowNoBake(f);
+                            long c = GC.GetTotalMemory(false);
+                            gen += Math.Max(0, b - a);
+                            build += Math.Max(0, c - b);
+                        }
+                        Log(string.Format(Inv, "alloc {0} pass {1}: generator {2} B, renderer {3} B over {4} frames", sp, pass, gen, build, frames + 1));
+                    }
+                }
+            }
+            finally
+            {
+                tree.Dispose();
+            }
+        }
+
         private static string[] DefaultKeys()
         {
             var keys = new List<string>();

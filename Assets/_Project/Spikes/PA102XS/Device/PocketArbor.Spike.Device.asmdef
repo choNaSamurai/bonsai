@@ -2,7 +2,8 @@
     "name": "PocketArbor.Spike.Device",
     "rootNamespace": "PocketArbor.Spike.Device",
     "references": [
-        "PocketArbor.Spike.Render"
+        "PocketArbor.Spike.Render",
+        "Unity.InputSystem"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

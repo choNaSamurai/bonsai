@@ -38,6 +38,7 @@ namespace PocketArbor.Spike.Editor
 
             ConfigurePlayer();
             if (Arg("-spikeAllowVulkan") != "0") AllowVulkanOnAllDevices();
+            else ClearVulkanFilterAsset();
             var summary = new StringBuilder();
             bool failed = false;
             foreach (string v in variantsArg.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries))
@@ -46,10 +47,21 @@ namespace PocketArbor.Spike.Editor
                 bool dev = v.EndsWith("-dev", StringComparison.Ordinal) || trace;
                 bool empty = v.EndsWith("-empty", StringComparison.Ordinal);
                 bool noPso = v.EndsWith("-nopso", StringComparison.Ordinal);
-                if (!empty) MakeScene(trace, !trace && !noPso);
                 bool gles = v.StartsWith("gles", StringComparison.Ordinal);
+                // "interactive": the owner's debug-menu app — production API list (Vulkan, then GLES3; Unity's own device
+                // filter decides, so Pixel 6 runs GLES3 like players), "Bonsai Spike" icon name, auto-rotation.
+                bool interactive = v.StartsWith("interactive", StringComparison.Ordinal);
+                if (!empty) MakeScene(trace, !trace && !noPso, interactive ? "interactive" : Arg("-spikeScenario") ?? "2c");
                 PlayerSettings.SetUseDefaultGraphicsAPIs(BuildTarget.Android, false);
-                PlayerSettings.SetGraphicsAPIs(BuildTarget.Android, new[] { gles ? GraphicsDeviceType.OpenGLES3 : GraphicsDeviceType.Vulkan });
+                PlayerSettings.SetGraphicsAPIs(BuildTarget.Android, interactive
+                    ? new[] { GraphicsDeviceType.Vulkan, GraphicsDeviceType.OpenGLES3 }
+                    : new[] { gles ? GraphicsDeviceType.OpenGLES3 : GraphicsDeviceType.Vulkan });
+                PlayerSettings.productName = interactive ? "Bonsai Spike" : "PA102XS Spike";
+                PlayerSettings.defaultInterfaceOrientation = interactive ? UIOrientation.AutoRotation : UIOrientation.Portrait;
+                PlayerSettings.allowedAutorotateToPortrait = true;
+                PlayerSettings.allowedAutorotateToPortraitUpsideDown = false;
+                PlayerSettings.allowedAutorotateToLandscapeLeft = interactive;
+                PlayerSettings.allowedAutorotateToLandscapeRight = interactive;
                 EditorUserBuildSettings.development = dev;
                 string apk = Path.Combine(outDir, "PA102XS_" + v.Replace('-', '_') + ".apk");
                 var opts = new BuildPlayerOptions
@@ -81,8 +93,9 @@ namespace PocketArbor.Spike.Editor
 
         /// <summary>PSO collection traced on the device (K9), imported from src/Device/PSO.</summary>
         private const string PsoPath = "Assets/_Project/Spikes/PA102XS/Device/PSO/PA102XS_Vulkan.graphicsstate";
+        private const string PsoGlesPath = "Assets/_Project/Spikes/PA102XS/Device/PSO/PA102XS_OpenGLES3.graphicsstate";
 
-        private static void MakeScene(bool tracePso, bool usePso)
+        private static void MakeScene(bool tracePso, bool usePso, string scenario)
         {
             Directory.CreateDirectory(SceneDir);
             var scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
@@ -91,10 +104,11 @@ namespace PocketArbor.Spike.Editor
             SketchCamera.Apply(cam);
             var runner = new GameObject("PA102XS_DeviceRunner").AddComponent<SpikeDeviceRunner>();
             runner.cam = cam;
-            runner.scenario = Arg("-spikeScenario") ?? "2c";
+            runner.scenario = scenario;
             runner.tracePso = tracePso;
             runner.pso = usePso ? AssetDatabase.LoadAssetAtPath<GraphicsStateCollection>(PsoPath) : null;
-            Debug.Log("SPIKE-BUILD| scene: scenario " + runner.scenario + ", trace " + tracePso + ", pso " + (runner.pso != null ? runner.pso.totalGraphicsStateCount + " states" : "none"));
+            runner.psoGles = usePso ? AssetDatabase.LoadAssetAtPath<GraphicsStateCollection>(PsoGlesPath) : null;
+            Debug.Log("SPIKE-BUILD| scene: scenario " + runner.scenario + ", trace " + tracePso + ", pso " + (runner.pso != null ? runner.pso.totalGraphicsStateCount + " states" : "none") + ", gles " + (runner.psoGles != null ? runner.psoGles.totalGraphicsStateCount + " states" : "none"));
             string[] names = { SketchTreeRenderer.WoodShader, SketchTreeRenderer.PotShader, SketchTreeRenderer.LeafShader, SketchTreeRenderer.BakeShader };
             runner.shaders = new Shader[names.Length];
             for (int i = 0; i < names.Length; i++)
@@ -167,6 +181,16 @@ namespace PocketArbor.Spike.Editor
             {
                 Debug.LogWarning("SPIKE-VK| failed: " + e);
             }
+        }
+
+        /// <summary>Production behaviour: no Vulkan device-filter asset (Unity's built-in deny list applies).</summary>
+        private static void ClearVulkanFilterAsset()
+        {
+            System.Reflection.PropertyInfo p = typeof(PlayerSettings.Android).GetProperty("androidVulkanDeviceFilterListAsset",
+                System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
+            if (p == null) { Debug.LogWarning("SPIKE-VK| androidVulkanDeviceFilterListAsset not found"); return; }
+            p.SetValue(null, null);
+            Debug.Log("SPIKE-VK| filter asset cleared (production device filter)");
         }
 
         private static string Describe(string variant, BuildReport r, string apk)

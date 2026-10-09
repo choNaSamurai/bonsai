@@ -1,11 +1,11 @@
 #!/bin/zsh
 # PA-102X-S phase 2a: install + run the spike app on the connected phone, wait for done.txt, pull results.
-# usage: run-device.sh <apk> <label> [timeout_s=900]
+# usage: run-device.sh <apk> <label> [timeout_s=900] [scenario]  (scenario -> am start -e scenario X; overrides the APK's default)
 # Only installs/launches/stops the spike app, reads its files, logcat and dumpsys (no device settings changed).
 set -u
 ADB=/Applications/Unity/Hub/Editor/6000.6.4f1/PlaybackEngines/AndroidPlayer/SDK/platform-tools/adb
 PKG=com.pocketarbor.spike.pa102xs
-APK=$1; LABEL=$2; TMO=${3:-900}
+APK=$1; LABEL=$2; TMO=${3:-900}; SCN=${4:-}
 OUT=/Users/pavlyshyn/Developing/games/bonsai/.agent-workspace/pa102xs/device/$LABEL
 REMOTE=/sdcard/Android/data/$PKG/files/pa102xs
 mkdir -p $OUT
@@ -20,7 +20,7 @@ $ADB logcat -c
 ACT=$($ADB shell cmd package resolve-activity --brief $PKG | tail -1 | tr -d '\r')
 echo "launch $ACT"
 start=$(date +%s)
-$ADB shell am start -W -n $ACT > $OUT/start.txt 2>&1
+if [ -n "$SCN" ]; then $ADB shell am start -W -n $ACT -e scenario $SCN > $OUT/start.txt 2>&1; else $ADB shell am start -W -n $ACT > $OUT/start.txt 2>&1; fi
 ( $ADB logcat -v time -s Unity:V PA102XS:V > $OUT/logcat.txt 2>&1 ) & LC=$!
 done=0
 while [ $(( $(date +%s) - start )) -lt $TMO ]; do

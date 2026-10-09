@@ -565,6 +565,9 @@ namespace PocketArbor.Spike.Render
             b = t;
         }
 
+        /// <summary>Finishes the pending rebuild / cut now (waits for the worker, runs the remaining bake slices).</summary>
+        public void CompleteNow() => FinishAllNow();
+
         private void FinishAllNow()
         {
             while (_workPending || _job != Job.None)
