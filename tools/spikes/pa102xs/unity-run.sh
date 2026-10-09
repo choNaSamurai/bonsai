@@ -60,7 +60,8 @@ esac
 start=$(date +%s)
 "${cmd[@]}" & up=$!
 # watchdog polls every 5 s and exits with Unity — no orphan sleeps holding stdout
-( t=0; while kill -0 $up 2>/dev/null; do sleep 5; t=$((t+5)); [ $t -ge 1500 ] && { echo "watchdog: killing Unity after 25 min" >> $log; kill $up; break; }; done ) >/dev/null 2>&1 &
+TMO=${UNITY_TIMEOUT:-1500}   # seconds; Android IL2CPP builds may need 3600
+( t=0; while kill -0 $up 2>/dev/null; do sleep 5; t=$((t+5)); [ $t -ge $TMO ] && { echo "watchdog: killing Unity after $TMO s" >> $log; kill $up; break; }; done ) >/dev/null 2>&1 &
 wait $up; code=$?
 rsync -a --ignore-existing --include='*/' --include='*.meta' --exclude='*' $DST/ $SRC/
 

@@ -82,6 +82,7 @@ namespace PocketArbor.Spike.Editor
             string ws = GoldenFrameLoader.WorkspaceFolder();
             if (ws == null) throw new DirectoryNotFoundException(".agent-workspace/pa102xs not found from " + Application.dataPath);
             string outDir = budget ? Path.Combine(ws, "unity", "budget") : Path.Combine(ws, "unity");
+            if (ArgValue("-spikeOut") != null) outDir = Path.Combine(ws, "unity", ArgValue("-spikeOut") + (budget ? "_budget" : ""));
             string dbgDir = Path.Combine(outDir, "debug");
             Directory.CreateDirectory(outDir);
             Directory.CreateDirectory(dbgDir);

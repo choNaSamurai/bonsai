@@ -19,11 +19,22 @@ Shader "PocketArbor/Spike/Leaves"
             struct A { float3 pos : POSITION; float3 nrm : NORMAL; float4 tan : TANGENT; float2 q : TEXCOORD0; float2 sz : TEXCOORD1; float4 col : TEXCOORD2; };
             struct V { float4 cs : SV_POSITION; float2 uv : TEXCOORD0; float3 n : TEXCOORD1; float4 c : TEXCOORD2; };
 
+            float _SkWind, _SkStiff, _SkTime;
+
             V vert(A v)
             {
                 float3 d = normalize(v.tan.xyz), n = normalize(v.nrm);
+                // Wind exactly as the sketch's LVS (no rain impulse, no falling leaves).
+                float ph = dot(v.pos, float3(.045, .03, .038));
+                float hs = frac(sin(dot(v.pos, float3(12.9898, 78.233, 37.719))) * 43758.5453);
+                float a = _SkWind * _SkStiff * (.24 * sin(_SkTime * 2.3 + ph * 3. + hs * 6.28) + .11 * sin(_SkTime * 5.7 + hs * 12.)) * (.6 + .8 * hs);
+                float ca = cos(a), sa = sin(a);
+                float3 d2 = d * ca + n * sa;
+                n = n * ca - d * sa;
+                d = d2;
+                float3 B = v.pos + float3(1., 0., .3) * _SkWind * _SkStiff * .7 * sin(_SkTime * 1.3 + ph) * smoothstep(60., 260., v.pos.y);
                 float3 sd = normalize(cross(n, d));
-                float3 P = v.pos + d * (v.q.y * v.sz.x) + sd * (v.q.x * v.sz.y);
+                float3 P = B + d * (v.q.y * v.sz.x) + sd * (v.q.x * v.sz.y);
                 V o;
                 o.cs = TransformObjectToHClip(P);
                 o.uv = v.q;

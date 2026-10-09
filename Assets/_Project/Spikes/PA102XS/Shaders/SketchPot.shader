@@ -21,7 +21,7 @@ Shader "PocketArbor/Spike/Pot"
             #include "TreeSdf.hlsl"
             #include "SketchBakeFetch.hlsl"
 
-            struct A { float3 pos : POSITION; float3 nrm : NORMAL; float2 texel : TEXCOORD0; };
+            struct A { float3 pos : POSITION; float3 nrm : NORMAL; float3 texel : TEXCOORD0; };
             struct V { float4 cs : SV_POSITION; float3 ps : TEXCOORD0; float4 lt : TEXCOORD1; };
 
             V vert(A v)

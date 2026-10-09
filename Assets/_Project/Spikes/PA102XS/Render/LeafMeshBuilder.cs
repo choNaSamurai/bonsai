@@ -23,6 +23,25 @@ namespace PocketArbor.Spike.Render
 
         private static readonly Vector2[] Corners = { new Vector2(-.5f, 0f), new Vector2(.5f, 0f), new Vector2(-.5f, 1f), new Vector2(.5f, 1f) };
 
+        public int Count { get; private set; }
+
+        /// <summary>Leaf record index drawn by quad k (after sorting).</summary>
+        public int LeafOfQuad(int k) => _order[k];
+
+        /// <summary>Index buffer without the leaves flagged in <paramref name="removed"/> (by leaf record index). Returns index count.</summary>
+        public int IndicesWithout(bool[] removed, ref int[] dst)
+        {
+            if (dst == null || dst.Length < Count * 6) dst = new int[Count * 6];
+            int n = 0;
+            for (int k = 0; k < Count; k++)
+            {
+                if (removed[_order[k]]) continue;
+                System.Array.Copy(_idx, k * 6, dst, n, 6);
+                n += 6;
+            }
+            return n;
+        }
+
         public int Build(SketchFrame f, Mesh mesh, bool frontToBack)
         {
             int n = Mathf.Min(f.Nl, SketchConst.MAXLEAF);
@@ -76,6 +95,7 @@ namespace PocketArbor.Spike.Render
             if (n > 0) b.SetMinMax(mn, mx);
             b.Expand(40f);
             mesh.bounds = b;
+            Count = n;
             return n;
         }
 

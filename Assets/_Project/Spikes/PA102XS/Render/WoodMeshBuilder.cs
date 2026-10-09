@@ -23,6 +23,11 @@ namespace PocketArbor.Spike.Render
         private float[] _sr = new float[16384];
         private Vector3[] _st = new Vector3[16384];
         private readonly int[] _chunkGroup = new int[SketchConst.MAXCH];
+        // Index ranges of limbs (for cuts: the tree without a branch = the same vertices, fewer indices).
+        private int[] _limbGroup = new int[256], _limbIdx0 = new int[256], _limbIdxN = new int[256];
+
+        /// <summary>Group (GM index) of every chunk of the last build, -1 if none.</summary>
+        public int[] ChunkGroup => _chunkGroup;
         private int[] _soilMap = new int[1];
 
         public int LimbCount { get; private set; }
@@ -83,13 +88,45 @@ namespace PocketArbor.Spike.Render
                 float kg = g >= 0 ? f.Gm[g * 8 + 4] : 1f, ks = g >= 0 ? f.Gm[g * 8 + 7] : 1f;
                 bool first = g >= 0 && (int)f.Gm[g * 8 + 5] == start;
                 float tmax = Mathf.Max(0.8f, 0.6f * (first ? Mathf.Max(kg, ks) : ks));
+                int i0 = b.ICount;
                 Tube(b, n, true, tmax);
+                if (LimbCount == _limbGroup.Length)
+                {
+                    System.Array.Resize(ref _limbGroup, LimbCount * 2);
+                    System.Array.Resize(ref _limbIdx0, LimbCount * 2);
+                    System.Array.Resize(ref _limbIdxN, LimbCount * 2);
+                }
+                _limbGroup[LimbCount] = g;
+                _limbIdx0[LimbCount] = i0;
+                _limbIdxN[LimbCount] = b.ICount - i0;
                 LimbCount++;
             }
 
             LimbVerts = b.VCount - TrunkVerts - RootVerts;
             Soil(b, look);
             SoilVerts = b.VCount - TrunkVerts - RootVerts - LimbVerts;
+        }
+
+        /// <summary>Indices of <paramref name="b"/> without the limbs of group <paramref name="group"/> (into <paramref name="dst"/>). Returns count.</summary>
+        public int IndicesWithoutGroup(GeoBuffer b, int group, ref int[] dst)
+        {
+            if (dst == null || dst.Length < b.ICount) dst = new int[b.ICount];
+            int n = 0, at = 0;
+            for (int l = 0; l < LimbCount; l++)
+            {
+                int i0 = _limbIdx0[l];
+                System.Array.Copy(b.Idx, at, dst, n, i0 - at);
+                n += i0 - at;
+                at = i0 + _limbIdxN[l];
+                if (_limbGroup[l] != group)
+                {
+                    System.Array.Copy(b.Idx, i0, dst, n, _limbIdxN[l]);
+                    n += _limbIdxN[l];
+                }
+            }
+            System.Array.Copy(b.Idx, at, dst, n, b.ICount - at);
+            n += b.ICount - at;
+            return n;
         }
 
         private int PushCp(int n, float[] dat, int idx)

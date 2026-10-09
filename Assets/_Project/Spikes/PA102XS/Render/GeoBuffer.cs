@@ -7,13 +7,13 @@ namespace PocketArbor.Spike.Render
     /// <summary>
     /// Growable vertex/index buffer (sketch space) plus per-vertex bake inputs:
     /// TMax — how far the GPU snap may move the vertex along its normal; Kind — 0 wood tube, 1 soil, 2 pot.
-    /// Uv holds the integer texel of the vertex in the bake textures.
+    /// Uv holds the integer texel of the vertex in the bake textures (xy) and the vertex kind (z).
     /// </summary>
     public sealed class GeoBuffer
     {
         public Vector3[] Pos;
         public Vector3[] Nrm;
-        public Vector2[] Uv;
+        public Vector3[] Uv;
         public float[] TMax;
         public float[] Kind;
         public int[] Idx;
@@ -23,7 +23,7 @@ namespace PocketArbor.Spike.Render
         {
             Pos = new Vector3[vcap];
             Nrm = new Vector3[vcap];
-            Uv = new Vector2[vcap];
+            Uv = new Vector3[vcap];
             TMax = new float[vcap];
             Kind = new float[vcap];
             Idx = new int[icap];
@@ -61,18 +61,24 @@ namespace PocketArbor.Spike.Render
             for (int v = 0; v < VCount; v++)
             {
                 int g = offset + v;
-                Uv[v] = new Vector2(g % width, g / width);
+                Uv[v] = new Vector3(g % width, g / width, Kind[v]);
             }
         }
 
         public void ApplyTo(Mesh mesh, float boundsPad)
+        {
+            ApplyTo(mesh, boundsPad, ICount);
+        }
+
+        /// <summary>Uploads vertices and the first <paramref name="indexCount"/> indices of <see cref="Idx"/>.</summary>
+        public void ApplyTo(Mesh mesh, float boundsPad, int indexCount)
         {
             mesh.Clear();
             mesh.indexFormat = VCount > 65000 ? IndexFormat.UInt32 : IndexFormat.UInt16;
             mesh.SetVertices(Pos, 0, VCount);
             mesh.SetNormals(Nrm, 0, VCount);
             mesh.SetUVs(0, Uv, 0, VCount);
-            mesh.SetIndices(Idx, 0, ICount, MeshTopology.Triangles, 0, false);
+            mesh.SetIndices(Idx, 0, indexCount, MeshTopology.Triangles, 0, false);
             Bounds b = ComputeBounds();
             b.Expand(boundsPad * 2f);
             mesh.bounds = b;
@@ -90,6 +96,21 @@ namespace PocketArbor.Spike.Render
             Bounds b = new Bounds();
             b.SetMinMax(mn, mx);
             return b;
+        }
+
+        /// <summary>Copies vertices and indices (for double buffering).</summary>
+        public void CopyFrom(GeoBuffer o)
+        {
+            while (Pos.Length < o.VCount) GrowV();
+            if (Idx.Length < o.ICount) Array.Resize(ref Idx, o.ICount);
+            Array.Copy(o.Pos, Pos, o.VCount);
+            Array.Copy(o.Nrm, Nrm, o.VCount);
+            Array.Copy(o.Uv, Uv, o.VCount);
+            Array.Copy(o.TMax, TMax, o.VCount);
+            Array.Copy(o.Kind, Kind, o.VCount);
+            Array.Copy(o.Idx, Idx, o.ICount);
+            VCount = o.VCount;
+            ICount = o.ICount;
         }
 
         private void GrowV()

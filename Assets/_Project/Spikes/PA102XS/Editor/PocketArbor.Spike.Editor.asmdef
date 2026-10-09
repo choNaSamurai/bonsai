@@ -3,6 +3,7 @@
     "rootNamespace": "PocketArbor.Spike.Editor",
     "references": [
         "PocketArbor.Spike.Render",
+        "PocketArbor.Spike.Device",
         "Unity.RenderPipelines.Core.Runtime",
         "Unity.RenderPipelines.Universal.Runtime",
         "Unity.RenderPipelines.Universal.2D.Runtime"

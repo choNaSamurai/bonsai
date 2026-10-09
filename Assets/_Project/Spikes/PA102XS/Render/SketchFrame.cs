@@ -1,3 +1,4 @@
+using System;
 using UnityEngine;
 
 namespace PocketArbor.Spike.Render
@@ -59,6 +60,38 @@ namespace PocketArbor.Spike.Render
         public float Kr => 0.28f * R + 0.5f;
         public float Age => Mathf.Min(1f, T * 1.25f);
 
+        public void CopyFrom(SketchFrame o)
+        {
+            Key = o.Key; Species = o.Species; Style = o.Style; Seed = o.Seed; T = o.T; L = o.L; R = o.R;
+            Nr = o.Nr; Ng = o.Ng; Nb = o.Nb; Nl = o.Nl; Nx = o.Nx; Nc = o.Nc; Np = o.Np;
+            System.Array.Copy(o.Dat, Dat, Dat.Length);
+            System.Array.Copy(o.Cb, Cb, Cb.Length);
+            System.Array.Copy(o.Gm, Gm, Gm.Length);
+            System.Array.Copy(o.Pe, Pe, Pe.Length);
+            System.Array.Copy(o.Leaf, Leaf, Math.Min(Leaf.Length, o.Nl * 16));
+            LightDir = o.LightDir; SunColor = o.SunColor; Ambient = o.Ambient; SunIntensity = o.SunIntensity; Sun = o.Sun; Foliage = o.Foliage;
+        }
+
+        /// <summary>
+        /// Cut simulation in the SDF arrays: drops branch group <paramref name="g"/> from GM (its chunks stay in CB, unreferenced)
+        /// and, when pads map 1:1 to primary groups (all shown, apex dome last), its pad from PE.
+        /// </summary>
+        public void RemoveGroup(int g)
+        {
+            if (g < 0 || g >= Ng) return;
+            bool padsAligned = Np == Nb + 1 && g < Nb;
+            System.Array.Copy(Gm, (g + 1) * 8, Gm, g * 8, (Ng - g - 1) * 8);
+            Ng--;
+            System.Array.Clear(Gm, Ng * 8, 8);
+            if (padsAligned)
+            {
+                System.Array.Copy(Pe, (g + 1) * 8, Pe, g * 8, (Np - g - 1) * 8);
+                Np--;
+                System.Array.Clear(Pe, Np * 8, 8);
+            }
+            if (g < Nb) Nb--;
+        }
+
         public static string MakeKey(string species, string style, int seed, float t)
         {
             return species + "_" + style + "_s" + seed + "_t" + Mathf.RoundToInt(t * 100f);
@@ -69,7 +102,7 @@ namespace PocketArbor.Spike.Render
     public sealed class SpeciesLook
     {
         public int Id;
-        public float Fd, Tr, Bump, Moss;
+        public float Fd, Tr, Bump, Moss, Stiff = 1f;
         public int PotShape;     // 0 rounded rectangle, 1 ellipse
         public float PotHw, PotHd, PotDep;
         public Vector3 PotColor;
@@ -83,13 +116,13 @@ namespace PocketArbor.Spike.Render
             switch (species)
             {
                 case "yamazakura":
-                    s = new SpeciesLook { Id = 1, Fd = .04f, Tr = 1.5f, Bump = .9f, Moss = .5f, PotShape = 1, PotHw = 136, PotHd = 66, PotDep = 38, PotColor = new Vector3(.11f, .16f, .12f), PotGlaze = 2 };
+                    s = new SpeciesLook { Id = 1, Stiff = .9f, Fd = .04f, Tr = 1.5f, Bump = .9f, Moss = .5f, PotShape = 1, PotHw = 136, PotHd = 66, PotDep = 38, PotColor = new Vector3(.11f, .16f, .12f), PotGlaze = 2 };
                     break;
                 case "kuromatsu":
-                    s = new SpeciesLook { Id = 2, Fd = .075f, Tr = .6f, Bump = 2.6f, Moss = .6f, PotShape = 0, PotHw = 140, PotHd = 64, PotDep = 48, PotColor = new Vector3(.032f, .029f, .026f), PotGlaze = 1 };
+                    s = new SpeciesLook { Id = 2, Stiff = .35f, Fd = .075f, Tr = .6f, Bump = 2.6f, Moss = .6f, PotShape = 0, PotHw = 140, PotHd = 64, PotDep = 48, PotColor = new Vector3(.032f, .029f, .026f), PotGlaze = 1 };
                     break;
                 default:
-                    s = new SpeciesLook { Id = 0, Fd = .05f, Tr = 1.9f, Bump = .7f, Moss = .85f, PotShape = 0, PotHw = 140, PotHd = 62, PotDep = 40, PotColor = new Vector3(.17f, .08f, .045f), PotGlaze = 0 };
+                    s = new SpeciesLook { Id = 0, Stiff = 1f, Fd = .05f, Tr = 1.9f, Bump = .7f, Moss = .85f, PotShape = 0, PotHw = 140, PotHd = 62, PotDep = 40, PotColor = new Vector3(.17f, .08f, .045f), PotGlaze = 0 };
                     break;
             }
             if (style == "bunjin")
