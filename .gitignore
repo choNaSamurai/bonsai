@@ -80,3 +80,7 @@ Thumbs.db
 
 # Agent test copies / build artifacts (persist across Claude Code sessions; Unity ignores dot-folders)
 /.agent-workspace/
+
+# Python bytecode
+__pycache__/
+*.pyc
